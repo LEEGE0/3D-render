@@ -86,12 +86,23 @@ D:\3D-render
 
 1. Windows 11에서 저장소를 `D:\3D-render`에 둔다.
 2. Git 사용자 정보를 확인한다.
-3. Godot 4.7.2 Stable .NET과 호환 .NET SDK를 `D:\3D-render\tools` 아래에 준비한다.
+3. Godot 4.7.2 Stable .NET을 다음 콘솔 실행 파일 경로에 설치·확인한다: `D:\3D-render\tools\godot\4.7.2\Godot_v4.7.2-stable_mono_win64\Godot_v4.7.2-stable_mono_win64_console.exe`. 호환 .NET SDK와 D 드라이브의 로컬 NuGet 패키지 캐시도 `D:\3D-render\tools` 아래에 준비한다.
 4. FFmpeg 정식 빌드의 버전과 체크섬을 기록하고 `tools/`에 둔다.
 5. 실제 게임 자산이 필요하면 Steam 설치 경로를 읽기 전용 입력으로 선택한다.
 6. `local-assets/`, `tools/`, `cache/`, `exports/`가 Git에서 제외되는지 확인한다.
 
-아직 실행 가능한 Godot 프로젝트가 없으므로 현재 단계에서 빌드 명령을 제공하지 않는다. 프로젝트 골격이 추가되면 고정된 도구 버전과 정확한 빌드·테스트·내보내기 명령을 이 문서에 추가한다.
+### Task 3 프로젝트 골격 개발·검증
+
+Godot 프로젝트 골격과 Domain 테스트를 개발하거나 검증할 때 저장소 루트(`D:\3D-render`)에서 다음 명령을 순서대로 실행한다.
+
+```powershell
+& .\scripts\Test-ProjectSkeleton.ps1
+$env:NUGET_PACKAGES = 'D:\3D-render\tools\nuget-packages'
+dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo
+& .\scripts\Test-GodotRuntime.ps1
+```
+
+`Test-ProjectSkeleton.ps1`은 `.sln`, `project.godot`, 메인 장면·스크립트, Domain 프로젝트·소스, 테스트 프로젝트·소스의 존재와 C#·Forward Plus·`Godot.NET.Sdk/4.7.2`·`net8.0` 설정 및 네 패널을 검사한다. `Test-GodotRuntime.ps1`은 위의 D 드라이브 Godot 콘솔을 사용해 .NET 빌드, 리소스 import, Godot 솔루션 빌드, 메인 장면 실행을 차례로 수행한다. 모든 명령은 종료 코드 0이어야 하며, xUnit 테스트 실패는 0개, 장면 출력에는 `PROJECT_RUNTIME_READY`, 최종 출력에는 `GODOT_RUNTIME_VERIFICATION=PASS`가 있어야 한다.
 
 ## Git 작업 방식
 

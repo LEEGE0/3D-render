@@ -32,25 +32,25 @@
 - Consumes: 사용자 환경, Git 원격, 로컬 DSR 설치 경로
 - Produces: 후속 작업이 따를 자산 격리·검증·커밋·태그 정책
 
-- [ ] **Step 1: 로컬 전용 경로 제외 규칙을 작성한다**
+- [x] **Step 1: 로컬 전용 경로 제외 규칙을 작성한다**
 
   `local-assets/`, `tools/`, `cache/`, `exports/`, Godot/.NET 생성물을 `.gitignore`에 기록한다.
 
-- [ ] **Step 2: 작업 및 정상 버전 태그 규칙을 작성한다**
+- [x] **Step 2: 작업 및 정상 버전 태그 규칙을 작성한다**
 
   사용자 정상 동작 보고 → 구체적 재확인 → 긍정 응답 → 검증·커밋·푸시 → 주석 태그 생성·푸시 순서를 `AGENTS.md`에 기록한다.
 
-- [ ] **Step 3: DSR 자산 조사 근거를 기록한다**
+- [x] **Step 3: DSR 자산 조사 근거를 기록한다**
 
   파일 개수, 경로, 도구 버전·체크섬, 추출 결과, WitchyBND의 TAE 제어문자 제한과 후속 단계를 기록한다.
 
-- [ ] **Step 4: 검증한다**
+- [x] **Step 4: 검증한다**
 
   Run: `git check-ignore -v local-assets/project.json tools/WitchyBND-3.0.1.0/WitchyBND.exe`
 
   Expected: 두 파일 모두 `.gitignore` 규칙으로 제외된다.
 
-- [ ] **Step 5: 커밋하고 푸시한다**
+- [x] **Step 5: 커밋하고 푸시한다**
 
   ```powershell
   git add -- .gitignore AGENTS.md docs/research/dsr-animation-assets.md docs/superpowers/plans/2026-08-27-project-bootstrap.md
@@ -69,25 +69,25 @@
 - Consumes: 가이드의 `gangqueen-topview-guide-v1` 좌표·키프레임 형식과 Task 1 정책
 - Produces: 구현자가 따를 모듈 경계, 데이터 계약, 렌더·저장·테스트·릴리스 기준
 
-- [ ] **Step 1: 설계 명세를 작성한다**
+- [x] **Step 1: 설계 명세를 작성한다**
 
   단일 `SceneDocument`, 명령 기반 Undo/Redo, 2D/3D 투영, 전투 시각화, 로컬 자산 어댑터와 오프라인 경계를 정의한다.
 
-- [ ] **Step 2: 상세 문서를 책임별로 분리한다**
+- [x] **Step 2: 상세 문서를 책임별로 분리한다**
 
   제품, 요구사항, 시스템·데이터·편집기·전투·렌더·네트워크·성능·저장소·품질·복구·로드맵·Git 정책을 각각 독립 문서로 만든다.
 
-- [ ] **Step 3: README를 작성한다**
+- [x] **Step 3: README를 작성한다**
 
   프로젝트 목적, 핵심 기능, 기술 선택, 디렉터리, 개발 시작, 자산 정책, 문서 색인을 한글로 제공한다.
 
-- [ ] **Step 4: 문서 링크와 누락을 검증한다**
+- [x] **Step 4: 문서 링크와 누락을 검증한다**
 
   Run: `rg -n "[T]BD|[T]ODO|작성[ ]예정" README.md AGENTS.md docs`
 
   Expected: 미완성 표식이 없다.
 
-- [ ] **Step 5: 커밋하고 푸시한다**
+- [x] **Step 5: 커밋하고 푸시한다**
 
   변경된 문서 경로를 명시해 스테이징하고 `docs: 전체 아키텍처와 개발 가이드 작성`으로 커밋한 뒤 현재 브랜치를 푸시한다.
 
@@ -95,32 +95,46 @@
 
 **Files:**
 - Create: `src/PvpGuide.Editor/PvpGuide.Editor.csproj`
+- Create: `src/PvpGuide.Editor/PvpGuide.Editor.sln`
 - Create: `src/PvpGuide.Editor/project.godot`
 - Create: `src/PvpGuide.Editor/Scenes/Main/Main.tscn`
 - Create: `src/PvpGuide.Editor/Scenes/Main/Main.cs`
+- Create: `src/PvpGuide.Domain/PvpGuide.Domain.csproj`
+- Create: `src/PvpGuide.Domain/DomainAssembly.cs`
 - Create: `tests/PvpGuide.Domain.Tests/PvpGuide.Domain.Tests.csproj`
+- Create: `tests/PvpGuide.Domain.Tests/DomainAssemblyTests.cs`
+- Create: `scripts/Test-ProjectSkeleton.ps1`
+- Create: `scripts/Test-GodotRuntime.ps1`
 
 **Interfaces:**
 - Consumes: Task 2의 모듈 및 디렉터리 계약
 - Produces: 실행 가능한 Windows 11 Godot .NET 편집기와 테스트 프로젝트
 
-- [ ] **Step 1: 실행 실패를 확인하는 스모크 테스트를 작성한다**
+- [x] **Step 1: 실행 실패를 확인하는 스모크 테스트를 작성한다**
 
-  프로젝트 설정과 메인 장면이 아직 없을 때 검증 스크립트가 실패하는지 확인한다.
+  `scripts/Test-ProjectSkeleton.ps1`을 작성해 `project.godot`, Godot `.csproj`와 `.sln`, 메인 장면·스크립트, Domain 프로젝트·어셈블리 소스, xUnit 테스트 프로젝트·소스가 모두 존재하는지 검사한다. 또한 C#·Forward Plus·메인 장면 경로, `Godot.NET.Sdk/4.7.2`, `net8.0`, Domain 프로젝트 참조와 네 UI 패널 이름을 확인해 빈 골격이나 0개 테스트 구성을 통과시키지 않는다.
 
-- [ ] **Step 2: 최소 Godot .NET 프로젝트와 메인 장면을 작성한다**
+- [x] **Step 2: 최소 Godot .NET 프로젝트와 메인 장면을 작성한다**
 
-  루트 UI에 탑뷰와 3D 뷰용 컨테이너, 타임라인과 속성 패널의 자리만 생성한다.
+  `PvpGuide.Editor.csproj`와 `PvpGuide.Editor.sln`을 만들고 Godot .NET SDK `4.7.2`, 대상 프레임워크 `net8.0`을 고정한다. `project.godot`에는 C#·Forward Plus와 `res://Scenes/Main/Main.tscn`을 설정하고, 메인 장면의 루트 UI에 `TopViewPanel`, `WorldViewPanel`, `TimelinePanel`, `InspectorPanel`을 배치한다. `Main.cs`는 네 패널을 확인한 뒤 `PROJECT_RUNTIME_READY`를 출력한다.
 
-- [ ] **Step 3: 헤드리스 로드와 .NET 빌드를 검증한다**
+  Godot과 무관한 `PvpGuide.Domain.csproj` 및 `DomainAssembly.cs`는 일반 .NET 8 라이브러리로 두고, `PvpGuide.Domain.Tests.csproj`와 `DomainAssemblyTests.cs`는 xUnit v3로 실제 Domain 어셈블리 이름을 단언한다.
 
-  Run: Godot `--headless --path src/PvpGuide.Editor --editor --quit` 및 `dotnet test`.
+- [x] **Step 3: 프로젝트 구조와 Domain 테스트를 검증한다**
 
-  Expected: 종료 코드 0, 테스트 실패 0개.
+  Run: `& .\scripts\Test-ProjectSkeleton.ps1`, `$env:NUGET_PACKAGES = 'D:\3D-render\tools\nuget-packages'`, `dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo`.
 
-- [ ] **Step 4: 커밋하고 푸시한다**
+  Expected: 구조 검증 스크립트의 종료 코드가 0이고 `PROJECT_SKELETON_VERIFICATION=PASS`가 출력된다. `dotnet test`는 xUnit 테스트 실패 0개와 종료 코드 0이어야 하며, 오프라인 패키지 캐시 경로를 사용한다.
 
-  프로젝트와 테스트 경로만 명시해 스테이징하고 `feat: Godot 편집기 골격 추가`로 커밋·푸시한다.
+- [x] **Step 4: Godot 런타임을 끝까지 검증한다**
+
+  `scripts/Test-GodotRuntime.ps1`을 실행한다. 스크립트는 `D:\3D-render\tools\godot\4.7.2\Godot_v4.7.2-stable_mono_win64\Godot_v4.7.2-stable_mono_win64_console.exe`를 사용해 (1) `dotnet build`로 C# 프로젝트를 빌드하고, (2) `--headless --import`로 리소스를 가져오고, (3) `--headless --build-solutions --quit`로 Godot 솔루션을 빌드한 뒤, (4) `--headless --scene res://Scenes/Main/Main.tscn --quit-after 2`로 실제 메인 장면을 실행한다.
+
+  Expected: 네 단계 모두 종료 코드 0이고 오류 출력이 없으며, 장면 실행 출력에 `PROJECT_RUNTIME_READY`, 스크립트 최종 출력에 `GODOT_RUNTIME_VERIFICATION=PASS`가 포함된다.
+
+- [x] **Step 5: 커밋하고 푸시한다**
+
+  Task 3에서 변경한 모든 확인된 경로(프로젝트, Domain, 테스트, 검증 스크립트와 관련 문서)를 명시해 스테이징하고 `feat: Godot 편집기 골격 추가`로 커밋·푸시한다.
 
 ### Task 4: SceneDocument와 동시 뷰 투영
 
