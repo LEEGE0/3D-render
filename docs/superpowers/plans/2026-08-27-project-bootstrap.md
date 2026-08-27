@@ -83,7 +83,7 @@
 
 - [ ] **Step 4: 문서 링크와 누락을 검증한다**
 
-  Run: `rg -n "TBD|TODO|작성 예정" README.md AGENTS.md docs`
+  Run: `rg -n "[T]BD|[T]ODO|작성[ ]예정" README.md AGENTS.md docs`
 
   Expected: 미완성 표식이 없다.
 
