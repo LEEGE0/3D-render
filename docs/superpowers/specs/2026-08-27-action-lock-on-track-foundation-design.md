@@ -259,9 +259,10 @@ WorldView는 기존 actor `OverlayRoot` 아래에 action `Label3D`, lock target/
 - transform exact marker를 그대로 보존하고 새 exact marker를 추가한다.
 
 ```text
-ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1 schema_v2=1 migration_v1=1
+ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1
 ```
 
+- schema v2 round-trip과 v1 migration은 Infrastructure 테스트가 증명하며 Editor가 serializer를 참조하지 않는다.
 - 네 테스트 프로젝트 직렬 PASS, skeleton PASS, Godot build 경고 0·오류 0, 두 startup failure probe와 모든 기존 exact marker PASS가 필요하다.
 
 ## 11. 구현 단위
