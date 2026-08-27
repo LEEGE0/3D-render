@@ -2,15 +2,21 @@ using Godot;
 using PvpGuide.Application.Editing;
 using PvpGuide.Application.Projection;
 using PvpGuide.Domain;
+using PvpGuide.Editor.Features.Timeline;
 
 namespace PvpGuide.Editor.Features.ViewportSync;
+
+public sealed record WorldOverlayLabelStyle(BaseMaterial3D.BillboardModeEnum Billboard);
 
 public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITransformPreviewConsumer
 {
     private readonly Node3D _actorsRoot;
-    private readonly Dictionary<string, Node3D> _actorNodes = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ActorProjectionNodes> _actorNodes = new(StringComparer.Ordinal);
     private SceneSnapshot? _latestSnapshot;
     private TransformPreview? _preview;
+
+    public static WorldOverlayLabelStyle OverlayLabelStyle { get; } =
+        new(BaseMaterial3D.BillboardModeEnum.Enabled);
 
     public WorldViewProjectionAdapter(Node3D actorsRoot)
     {
@@ -24,6 +30,7 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
     public void Apply(SceneSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        var overlays = CreateSemanticOverlays(snapshot, _preview);
         _latestSnapshot = snapshot;
         ApplyCount++;
 
@@ -34,25 +41,35 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
         {
             var ownedNode = _actorNodes[actorId];
             _actorNodes.Remove(actorId);
-            ownedNode.QueueFree();
+            ownedNode.ActorRoot.QueueFree();
         }
 
         foreach (var (actorId, transform) in snapshot.ActorTransforms)
         {
-            ApplyTransform(GetOrCreateActorNode(actorId), transform.Position, transform.YawDegrees);
+            var nodes = GetOrCreateActorNodes(actorId);
+            ApplyTransform(nodes.ActorRoot, transform.Position, transform.YawDegrees);
         }
 
         ApplyActivePreview();
+        ApplyOverlays(overlays);
     }
 
     public void ApplyPreview(TransformPreview? preview)
     {
+        var overlays = _latestSnapshot is null
+            ? null
+            : CreateSemanticOverlays(_latestSnapshot, preview);
+
         _preview = preview;
         RestoreCommittedTransforms();
         ApplyActivePreview();
+        if (overlays is not null)
+        {
+            ApplyOverlays(overlays);
+        }
     }
 
-    private Node3D GetOrCreateActorNode(string actorId)
+    private ActorProjectionNodes GetOrCreateActorNodes(string actorId)
     {
         if (_actorNodes.TryGetValue(actorId, out var existing))
         {
@@ -63,7 +80,7 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
         {
             Name = CreateActorNodeName(
                 actorId,
-                _actorNodes.Values.Select(node => node.Name.ToString())),
+                _actorNodes.Values.Select(nodes => nodes.ActorRoot.Name.ToString())),
         };
         _actorsRoot.AddChild(actorRoot);
 
@@ -105,9 +122,42 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
         };
         visualRoot.AddChild(facingMarker);
 
-        actorRoot.AddChild(new Node3D { Name = "OverlayRoot" });
-        _actorNodes.Add(actorId, actorRoot);
-        return actorRoot;
+        var overlayRoot = new Node3D { Name = "OverlayRoot" };
+        actorRoot.AddChild(overlayRoot);
+
+        var actionLabel = CreateOverlayLabel(
+            "ActionLabel",
+            new Vector3(0, 2.45f, 0),
+            fontSize: 32,
+            pixelSize: 0.004f,
+            new Color("f4f7ff"));
+        overlayRoot.AddChild(actionLabel);
+
+        var lockBadge = CreateOverlayLabel(
+            "LockBadge",
+            new Vector3(0, 2.15f, 0),
+            fontSize: 28,
+            pixelSize: 0.004f,
+            new Color("ff6b6b"));
+        overlayRoot.AddChild(lockBadge);
+
+        var lockLineMesh = new ImmediateMesh();
+        var lockLine = new MeshInstance3D
+        {
+            Name = "LockLine",
+            Mesh = lockLineMesh,
+            MaterialOverride = new StandardMaterial3D
+            {
+                AlbedoColor = new Color("ff6b6b"),
+                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
+            },
+            Visible = false,
+        };
+        overlayRoot.AddChild(lockLine);
+
+        var created = new ActorProjectionNodes(actorRoot, actionLabel, lockBadge, lockLine, lockLineMesh);
+        _actorNodes.Add(actorId, created);
+        return created;
     }
 
     private void RestoreCommittedTransforms()
@@ -119,19 +169,65 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
 
         foreach (var (actorId, transform) in _latestSnapshot.ActorTransforms)
         {
-            if (_actorNodes.TryGetValue(actorId, out var actorRoot))
+            if (_actorNodes.TryGetValue(actorId, out var nodes))
             {
-                ApplyTransform(actorRoot, transform.Position, transform.YawDegrees);
+                ApplyTransform(nodes.ActorRoot, transform.Position, transform.YawDegrees);
             }
         }
     }
 
     private void ApplyActivePreview()
     {
-        if (_preview is not null && _actorNodes.TryGetValue(_preview.ActorId, out var actorRoot))
+        if (_preview is not null && _actorNodes.TryGetValue(_preview.ActorId, out var nodes))
         {
-            ApplyTransform(actorRoot, _preview.Position, _preview.YawDegrees);
+            ApplyTransform(nodes.ActorRoot, _preview.Position, _preview.YawDegrees);
         }
+    }
+
+    private void ApplyOverlays(IReadOnlyDictionary<string, SemanticActorOverlay> overlays)
+    {
+        foreach (var (actorId, overlay) in overlays)
+        {
+            if (_actorNodes.TryGetValue(actorId, out var nodes))
+            {
+                ApplyOverlay(nodes, overlay);
+            }
+        }
+    }
+
+    private static IReadOnlyDictionary<string, SemanticActorOverlay> CreateSemanticOverlays(
+        SceneSnapshot snapshot,
+        TransformPreview? preview) =>
+        SemanticOverlayLayout.CreateScene(
+            snapshot,
+            preview is null
+                ? null
+                : new Dictionary<string, Position3>(StringComparer.Ordinal)
+                {
+                    [preview.ActorId] = preview.Position,
+                });
+
+    private static void ApplyOverlay(ActorProjectionNodes nodes, SemanticActorOverlay overlay)
+    {
+        nodes.ActionLabel.Text = overlay.ActionLabel ?? string.Empty;
+        nodes.ActionLabel.Visible = overlay.ActionLabel is not null;
+        nodes.LockBadge.Text = overlay.LockBadge ?? string.Empty;
+        nodes.LockBadge.Visible = overlay.LockBadge is not null;
+
+        nodes.LockLineMesh.ClearSurfaces();
+        if (overlay.LockLine is null)
+        {
+            nodes.LockLine.Visible = false;
+            return;
+        }
+
+        var vertices = ToWorldLineVertices(overlay.LockLine);
+        var actorTransformInverse = nodes.ActorRoot.Transform.AffineInverse();
+        nodes.LockLineMesh.SurfaceBegin(Mesh.PrimitiveType.Lines);
+        nodes.LockLineMesh.SurfaceAddVertex(actorTransformInverse * ToVector3(vertices.Start));
+        nodes.LockLineMesh.SurfaceAddVertex(actorTransformInverse * ToVector3(vertices.End));
+        nodes.LockLineMesh.SurfaceEnd();
+        nodes.LockLine.Visible = true;
     }
 
     private static void ApplyTransform(Node3D actorRoot, Position3 position, double yawDegrees)
@@ -143,6 +239,37 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
             (float)worldPosition.Z);
         actorRoot.Rotation = new Vector3(0, (float)WorldTransformMapper.ToRotationYRadians(yawDegrees), 0);
     }
+
+    public static (WorldPosition Start, WorldPosition End) ToWorldLineVertices(SemanticOverlayLine line)
+    {
+        ArgumentNullException.ThrowIfNull(line);
+        return (
+            WorldTransformMapper.ToWorldPosition(line.Start),
+            WorldTransformMapper.ToWorldPosition(line.End));
+    }
+
+    private static Label3D CreateOverlayLabel(
+        string name,
+        Vector3 position,
+        int fontSize,
+        float pixelSize,
+        Color modulateColor)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
+        return new Label3D
+        {
+            Name = name,
+            Position = position,
+            FontSize = fontSize,
+            PixelSize = pixelSize,
+            Modulate = modulateColor,
+            Billboard = OverlayLabelStyle.Billboard,
+            Visible = false,
+        };
+    }
+
+    private static Vector3 ToVector3(WorldPosition position) =>
+        new((float)position.X, (float)position.Y, (float)position.Z);
 
     private static string SanitizeNodeName(string actorId)
     {
@@ -175,4 +302,11 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
 
         return candidate;
     }
+
+    private sealed record ActorProjectionNodes(
+        Node3D ActorRoot,
+        Label3D ActionLabel,
+        Label3D LockBadge,
+        MeshInstance3D LockLine,
+        ImmediateMesh LockLineMesh);
 }

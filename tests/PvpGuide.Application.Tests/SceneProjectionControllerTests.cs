@@ -11,6 +11,43 @@ namespace PvpGuide.Application.Tests;
 public sealed class SceneProjectionControllerTests
 {
     [Fact]
+    public void Projection_delivers_same_semantic_state_to_both_consumers()
+    {
+        var document = SceneDocument.Create(
+            "semantic-projection",
+            "semantic-projection",
+            null,
+            durationSeconds: 2,
+            framesPerSecond: 30,
+            [
+                new ActorTrack(
+                    "host",
+                    "Host",
+                    "player",
+                    [new TransformKeyframe("host-transform", 0, new Position3(0, 0, 0), 0)],
+                    [new ActionKeyframe("host-action", 1, "attack")],
+                    [new LockOnKeyframe("host-lock", 1, true, "invader")]),
+                new ActorTrack(
+                    "invader",
+                    "Invader",
+                    "enemy",
+                    [new TransformKeyframe("invader-transform", 0, new Position3(4, 0, -1), 180)],
+                    [],
+                    []),
+            ]);
+        var playback = new PlaybackClock(2, 30);
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(document, playback, top, world);
+
+        Assert.True(playback.Seek(1.5));
+
+        Assert.Same(top.Received.Single(), world.Received.Single());
+        Assert.Equal("attack", top.Received[0].ActorTimelineStates["host"].Action.ActionKey);
+        Assert.Equal("invader", top.Received[0].ActorTimelineStates["host"].LockOn.TargetActorId);
+    }
+
+    [Fact]
     public void Time_change_projects_same_revision_at_new_time_to_both_consumers()
     {
         var document = SceneDocument.Create(

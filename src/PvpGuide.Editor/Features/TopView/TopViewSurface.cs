@@ -3,8 +3,16 @@ using PvpGuide.Application.Editing;
 using PvpGuide.Application.Projection;
 using PvpGuide.Application.Sessions;
 using PvpGuide.Domain;
+using PvpGuide.Editor.Features.Timeline;
 
 namespace PvpGuide.Editor.Features.TopView;
+
+public enum TopViewSemanticDrawLayer
+{
+    LockLines,
+    ActorBodies,
+    TargetMarkers,
+}
 
 public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransformPreviewConsumer
 {
@@ -16,6 +24,7 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     private readonly Color _actorColor = new("55aaff");
     private readonly Color _selectedColor = new("ffd166");
     private readonly Color _previewColor = new("7ee787");
+    private readonly Color _lockColor = new("ff6b6b");
     private DocumentSession? _session;
     private SceneSnapshot? _latestSnapshot;
     private TransformPreview? _preview;
@@ -25,6 +34,14 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     private Position3 _dragStartPosition;
     private double _dragStartYaw;
     private bool _disposed;
+
+    public static IReadOnlyList<TopViewSemanticDrawLayer> SemanticDrawLayerOrder { get; } =
+        Array.AsReadOnly<TopViewSemanticDrawLayer>(
+        [
+            TopViewSemanticDrawLayer.LockLines,
+            TopViewSemanticDrawLayer.ActorBodies,
+            TopViewSemanticDrawLayer.TargetMarkers,
+        ]);
 
     public int ApplyCount { get; private set; }
 
@@ -54,6 +71,7 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     public void Apply(SceneSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
+        _ = SemanticOverlayLayout.CreateScene(snapshot);
         _latestSnapshot = snapshot;
         ApplyCount++;
 
@@ -74,13 +92,56 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     public override void _Draw()
     {
         DrawGrid();
-        if (_latestSnapshot is null)
+        var snapshot = _latestSnapshot;
+        if (snapshot is null)
         {
             return;
         }
 
         var mapper = CreateMapper();
-        foreach (var (actorId, committed) in _latestSnapshot.ActorTransforms)
+        var overlays = SemanticOverlayLayout.CreateScene(snapshot, CreateDisplayedPositions());
+        foreach (var layer in SemanticDrawLayerOrder)
+        {
+            switch (layer)
+            {
+                case TopViewSemanticDrawLayer.LockLines:
+                    DrawLockLines(mapper, overlays);
+                    break;
+                case TopViewSemanticDrawLayer.ActorBodies:
+                    DrawActorBodies(snapshot, mapper, overlays);
+                    break;
+                case TopViewSemanticDrawLayer.TargetMarkers:
+                    DrawTargetMarkers(mapper, overlays);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unsupported top-view semantic draw layer: {layer}.");
+            }
+        }
+    }
+
+    private void DrawLockLines(
+        TopViewCoordinateMapper mapper,
+        IReadOnlyDictionary<string, SemanticActorOverlay> overlays)
+    {
+        foreach (var overlay in overlays.Values)
+        {
+            if (overlay.LockLine is not { } lockLine)
+            {
+                continue;
+            }
+
+            var start = ToVector2(mapper.WorldToScreen(lockLine.Start));
+            var end = ToVector2(mapper.WorldToScreen(lockLine.End));
+            DrawLine(start, end, _lockColor, 2, true);
+        }
+    }
+
+    private void DrawActorBodies(
+        SceneSnapshot snapshot,
+        TopViewCoordinateMapper mapper,
+        IReadOnlyDictionary<string, SemanticActorOverlay> overlays)
+    {
+        foreach (var (actorId, committed) in snapshot.ActorTransforms)
         {
             var transform = GetDisplayedTransform(actorId, committed);
             var center = ToVector2(mapper.WorldToScreen(transform.Position));
@@ -122,14 +183,42 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
                 -1,
                 14,
                 bodyColor);
+            if (overlays[actorId].ActionLabel is { } actionLabel)
+            {
+                DrawString(
+                    GetThemeDefaultFont(),
+                    center + new Vector2(17, 8),
+                    actionLabel,
+                    HorizontalAlignment.Left,
+                    -1,
+                    13,
+                    bodyColor);
+            }
+
             DrawString(
                 GetThemeDefaultFont(),
-                center + new Vector2(17, 8),
+                center + new Vector2(17, 26),
                 $"역할: {displayInfo.Role}",
                 HorizontalAlignment.Left,
                 -1,
                 13,
                 bodyColor);
+        }
+    }
+
+    private void DrawTargetMarkers(
+        TopViewCoordinateMapper mapper,
+        IReadOnlyDictionary<string, SemanticActorOverlay> overlays)
+    {
+        foreach (var overlay in overlays.Values)
+        {
+            if (overlay.TargetMarkerPosition is not { } markerPosition)
+            {
+                continue;
+            }
+
+            var marker = ToVector2(mapper.WorldToScreen(markerPosition));
+            DrawCircle(marker, 5, _lockColor);
         }
     }
 
@@ -387,6 +476,14 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         _preview is not null && _preview.ActorId == actorId
             ? new EvaluatedTransform(_preview.Position, _preview.YawDegrees)
             : committed;
+
+    private IReadOnlyDictionary<string, Position3>? CreateDisplayedPositions() =>
+        _preview is null
+            ? null
+            : new Dictionary<string, Position3>(StringComparer.Ordinal)
+            {
+                [_preview.ActorId] = _preview.Position,
+            };
 
     private TopViewCoordinateMapper CreateMapper() => new(
         Math.Max(Size.X, 1),
