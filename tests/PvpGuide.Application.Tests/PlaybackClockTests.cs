@@ -27,10 +27,11 @@ public sealed class PlaybackClockTests
         var changes = 0;
         clock.Changed += (_, _) => changes++;
 
-        clock.Play();
-        clock.Advance(1);
-        clock.Seek(0);
-        clock.Stop();
+        Assert.False(clock.Play());
+        Assert.False(clock.Advance(1));
+        Assert.False(clock.Toggle());
+        Assert.False(clock.Seek(0));
+        Assert.False(clock.Stop());
 
         Assert.Equal(0, clock.CurrentTimeSeconds);
         Assert.False(clock.IsPlaying);
