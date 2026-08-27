@@ -1,6 +1,6 @@
 namespace PvpGuide.Application.Playback;
 
-public sealed class PlaybackClock
+public sealed class PlaybackClock : IPlaybackTimeSource
 {
     public PlaybackClock(double durationSeconds, int framesPerSecond)
     {

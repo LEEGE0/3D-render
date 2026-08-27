@@ -117,7 +117,7 @@
 
 **Produces:** same-revision time reprojection, shared snapshot instance delivery, dual-event disposal
 
-- [ ] **Step 1: 시간 변경 투영 테스트를 RED로 작성한다**
+- [x] **Step 1: 시간 변경 투영 테스트를 RED로 작성한다**
 
   두 변환 키를 가진 실제 document/session으로 다음을 검증한다.
 
@@ -133,17 +133,17 @@
 
   동일 `(revision,time)` 명시 요청은 억제하고, time만 변경·revision만 변경하면 각각 한 번 전달하며, Dispose 후 두 event 모두 전달하지 않는 테스트를 추가한다.
 
-- [ ] **Step 2: 시간 소스와 projection dedupe를 최소 구현한다**
+- [x] **Step 2: 시간 소스와 projection dedupe를 최소 구현한다**
 
   `IPlaybackTimeSource`는 현재 시간과 `Changed` event만 노출하고 `PlaybackClock`이 구현한다. `SceneProjectionController`는 fixed `_timeSeconds`를 제거하고 source와 playback 모두 구독한다. 마지막 키를 `(long Revision, double TimeSeconds)?`로 보관하며 매 투영에서 snapshot 한 번을 만들고 두 distinct consumer에 같은 인스턴스를 전달한다.
 
   문서 변경 handler는 현재 playback 시간을 사용한다. playback handler도 같은 경로를 사용한다. `ProjectCurrent()`는 같은 key면 no-op이며 Dispose는 두 구독을 모두 해제한다.
 
-- [ ] **Step 3: Main 조립을 새 생성자 계약으로 옮긴다**
+- [x] **Step 3: Main 조립을 새 생성자 계약으로 옮긴다**
 
   기존 runtime 동작과 표식은 바꾸지 않고 `session.Playback`을 projection controller에 전달한다. 최초 `ProjectCurrent()`와 기존 basic editing projection count가 그대로 유지되는지 컴파일과 Application 테스트로 확인한다.
 
-- [ ] **Step 4: 전체 순수 테스트와 구조를 직렬 검증한다**
+- [x] **Step 4: 전체 순수 테스트와 구조를 직렬 검증한다**
 
   ```powershell
   $projects = @(
@@ -159,7 +159,7 @@
   & .\scripts\Test-ProjectSkeleton.ps1
   ```
 
-- [ ] **Step 5: fresh spec/quality 리뷰 후 메인이 커밋·푸시한다**
+- [x] **Step 5: fresh spec/quality 리뷰 후 메인이 커밋·푸시한다**
 
   리뷰는 동일 snapshot instance, shortest-yaw 실제 평가, exact double key, 중복 억제, observer/Dispose, 기존 projection count를 확인한다.
 

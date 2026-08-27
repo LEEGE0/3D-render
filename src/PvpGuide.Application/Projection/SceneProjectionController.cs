@@ -1,23 +1,25 @@
 using PvpGuide.Domain;
+using PvpGuide.Application.Playback;
 
 namespace PvpGuide.Application.Projection;
 
 public sealed class SceneProjectionController : IDisposable
 {
     private readonly ISceneSnapshotSource _source;
+    private readonly IPlaybackTimeSource _playback;
     private readonly ISceneProjectionConsumer _topConsumer;
     private readonly ISceneProjectionConsumer _worldConsumer;
-    private readonly double _timeSeconds;
-    private long? _lastProjectedRevision;
+    private (long Revision, double TimeSeconds)? _lastProjectedKey;
     private bool _disposed;
 
     public SceneProjectionController(
         ISceneSnapshotSource source,
+        IPlaybackTimeSource playback,
         ISceneProjectionConsumer topConsumer,
-        ISceneProjectionConsumer worldConsumer,
-        double timeSeconds = 0)
+        ISceneProjectionConsumer worldConsumer)
     {
         ArgumentNullException.ThrowIfNull(source);
+        ArgumentNullException.ThrowIfNull(playback);
         ArgumentNullException.ThrowIfNull(topConsumer);
         ArgumentNullException.ThrowIfNull(worldConsumer);
         if (ReferenceEquals(topConsumer, worldConsumer))
@@ -25,16 +27,12 @@ public sealed class SceneProjectionController : IDisposable
             throw new ArgumentException("Top and world consumers must be distinct instances.", nameof(worldConsumer));
         }
 
-        if (!double.IsFinite(timeSeconds))
-        {
-            throw new ArgumentOutOfRangeException(nameof(timeSeconds), "Projection time must be finite.");
-        }
-
         _source = source;
+        _playback = playback;
         _topConsumer = topConsumer;
         _worldConsumer = worldConsumer;
-        _timeSeconds = timeSeconds;
         _source.Changed += OnDocumentChanged;
+        _playback.Changed += OnPlaybackChanged;
     }
 
     public void ProjectCurrent()
@@ -44,8 +42,7 @@ public sealed class SceneProjectionController : IDisposable
             return;
         }
 
-        var snapshot = _source.CreateSnapshot(_timeSeconds);
-        ProjectSnapshot(snapshot);
+        ProjectAtCurrentTime();
     }
 
     public void Dispose()
@@ -56,6 +53,7 @@ public sealed class SceneProjectionController : IDisposable
         }
 
         _source.Changed -= OnDocumentChanged;
+        _playback.Changed -= OnPlaybackChanged;
         _disposed = true;
     }
 
@@ -66,29 +64,46 @@ public sealed class SceneProjectionController : IDisposable
             return;
         }
 
-        ProjectRevision(eventArgs.Revision);
+        ProjectRevisionAtCurrentTime(eventArgs.Revision);
     }
 
-    private void ProjectRevision(long revision)
+    private void OnPlaybackChanged(object? sender, PlaybackChangedEventArgs eventArgs)
     {
-        if (_lastProjectedRevision == revision)
+        if (_disposed)
         {
             return;
         }
 
-        var snapshot = _source.CreateSnapshot(_timeSeconds);
+        ProjectAtCurrentTime();
+    }
+
+    private void ProjectAtCurrentTime()
+    {
+        var snapshot = _source.CreateSnapshot(_playback.CurrentTimeSeconds);
+        ProjectSnapshot(snapshot);
+    }
+
+    private void ProjectRevisionAtCurrentTime(long revision)
+    {
+        var timeSeconds = _playback.CurrentTimeSeconds;
+        if (_lastProjectedKey == (revision, timeSeconds))
+        {
+            return;
+        }
+
+        var snapshot = _source.CreateSnapshot(timeSeconds);
         ProjectSnapshot(snapshot);
     }
 
     private void ProjectSnapshot(SceneSnapshot snapshot)
     {
-        if (_lastProjectedRevision == snapshot.Revision)
+        if (_lastProjectedKey == (snapshot.Revision, snapshot.TimeSeconds))
         {
             return;
         }
 
         _topConsumer.Apply(snapshot);
         _worldConsumer.Apply(snapshot);
-        _lastProjectedRevision = snapshot.Revision;
+        _lastProjectedKey = (snapshot.Revision, snapshot.TimeSeconds);
     }
 }

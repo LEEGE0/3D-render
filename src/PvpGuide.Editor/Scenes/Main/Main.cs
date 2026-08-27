@@ -80,6 +80,7 @@ public partial class Main : Control
         _topViewSurface = topViewSurface;
         _projectionController = new SceneProjectionController(
             session.SnapshotSource,
+            session.Playback,
             topViewSurface,
             worldAdapter);
         _previewController = new TransformPreviewController(
