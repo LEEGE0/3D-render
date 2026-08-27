@@ -70,6 +70,7 @@ $requiredFiles = @(
     (Join-Path $projectRoot 'Features\Timeline\TimelineController.cs.uid'),
     (Join-Path $projectRoot 'Features\Timeline\TimelineTimeFormatter.cs'),
     (Join-Path $projectRoot 'Features\Timeline\TimelineTimeFormatter.cs.uid'),
+    (Join-Path $projectRoot 'Features\Timeline\TransformTrackLayout.cs'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs.uid'),
     (Join-Path $sampleRoot 'synthetic-topview-v1.scene.json'),
@@ -88,7 +89,8 @@ $requiredFiles = @(
     (Join-Path $editorTestRoot 'TopViewCoordinateMapperTests.cs'),
     (Join-Path $editorTestRoot 'WorldTransformMapperTests.cs'),
     (Join-Path $editorTestRoot 'RenderQueueTests.cs'),
-    (Join-Path $editorTestRoot 'TimelineTimeFormatterTests.cs')
+    (Join-Path $editorTestRoot 'TimelineTimeFormatterTests.cs'),
+    (Join-Path $editorTestRoot 'TransformTrackLayoutTests.cs')
 )
 
 foreach ($requiredFile in $requiredFiles) {
@@ -135,6 +137,7 @@ $worldTransformMapperFile = Join-Path $projectRoot 'Features\ViewportSync\WorldT
 $playbackTimeSourceFile = Join-Path $applicationRoot 'Playback\IPlaybackTimeSource.cs'
 $playbackClockFile = Join-Path $applicationRoot 'Playback\PlaybackClock.cs'
 $timelineTimeFormatterFile = Join-Path $projectRoot 'Features\Timeline\TimelineTimeFormatter.cs'
+$transformTrackLayoutFile = Join-Path $projectRoot 'Features\Timeline\TransformTrackLayout.cs'
 
 Assert-Contains $projectFile 'run/main_scene="res://Scenes/Main/Main\.tscn"' '메인 장면 설정'
 Assert-Contains $projectFile '"C#"' 'C# 기능 설정'
@@ -154,6 +157,7 @@ Assert-NotContains $worldTransformMapperFile 'Godot|Vector[234]' 'WorldTransform
 Assert-NotContains $playbackTimeSourceFile 'Godot|Node|Timer' 'IPlaybackTimeSource의 Godot 독립성'
 Assert-NotContains $playbackClockFile 'Godot|Node|Timer' 'PlaybackClock의 Godot 독립성'
 Assert-NotContains $timelineTimeFormatterFile 'Godot|Node|Control' 'TimelineTimeFormatter의 Godot 독립성'
+Assert-NotContains $transformTrackLayoutFile 'Godot|Node|Control|Vector' 'TransformTrackLayout의 Godot 독립성'
 
 foreach ($nodeName in @('TopViewPanel', 'WorldViewPanel', 'TimelinePanel', 'InspectorPanel')) {
     Assert-Contains $sceneFile ([regex]::Escape('name="' + $nodeName + '"')) "장면 노드 $nodeName"
