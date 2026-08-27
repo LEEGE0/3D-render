@@ -20,3 +20,6 @@ Thumbs.db
 .vscode/
 *.user
 *.suo
+
+# 기능 작업 격리용 로컬 Git worktree
+.worktrees/
