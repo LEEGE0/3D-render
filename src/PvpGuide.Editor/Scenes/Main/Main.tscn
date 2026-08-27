@@ -1,8 +1,10 @@
-[gd_scene load_steps=6 format=3]
+[gd_scene load_steps=8 format=3]
 
 [ext_resource type="Script" path="res://Scenes/Main/Main.cs" id="1_main"]
 [ext_resource type="Script" path="res://Features/TopView/TopViewSurface.cs" id="2_topview"]
 [ext_resource type="Script" path="res://Features/Timeline/TransformTrackSurface.cs" id="3_transform_track"]
+[ext_resource type="Script" path="res://Features/Timeline/ActionTrackSurface.cs" id="4_action_track"]
+[ext_resource type="Script" path="res://Features/Timeline/LockOnTrackSurface.cs" id="5_lock_on_track"]
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
 albedo_color = Color(0.12, 0.16, 0.21, 1)
@@ -83,7 +85,7 @@ offset_left = 16.0
 offset_top = 16.0
 offset_right = 944.0
 offset_bottom = 344.0
-theme_override_constants/separation = 12
+theme_override_constants/separation = 2
 
 [node name="PlaybackButtons" type="HBoxContainer" parent="TimelinePanel/TimelineControls"]
 layout_mode = 2
@@ -114,6 +116,42 @@ text = "키프레임 추가"
 [node name="DeleteKeyframeButton" type="Button" parent="TimelinePanel/TimelineControls/KeyframeToolbar"]
 layout_mode = 2
 text = "선택 키프레임 삭제"
+
+[node name="ActionTrackSurface" type="Control" parent="TimelinePanel/TimelineControls"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+mouse_filter = 0
+script = ExtResource("4_action_track")
+
+[node name="ActionToolbar" type="HBoxContainer" parent="TimelinePanel/TimelineControls"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="ActionAddButton" type="Button" parent="TimelinePanel/TimelineControls/ActionToolbar"]
+layout_mode = 2
+text = "Action 추가"
+
+[node name="ActionDeleteButton" type="Button" parent="TimelinePanel/TimelineControls/ActionToolbar"]
+layout_mode = 2
+text = "선택 Action 삭제"
+
+[node name="LockOnTrackSurface" type="Control" parent="TimelinePanel/TimelineControls"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+mouse_filter = 0
+script = ExtResource("5_lock_on_track")
+
+[node name="LockOnToolbar" type="HBoxContainer" parent="TimelinePanel/TimelineControls"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="LockOnAddButton" type="Button" parent="TimelinePanel/TimelineControls/LockOnToolbar"]
+layout_mode = 2
+text = "Lock-on 추가"
+
+[node name="LockOnDeleteButton" type="Button" parent="TimelinePanel/TimelineControls/LockOnToolbar"]
+layout_mode = 2
+text = "선택 Lock-on 삭제"
 
 [node name="TimeSlider" type="HSlider" parent="TimelinePanel/TimelineControls"]
 layout_mode = 2
@@ -200,6 +238,88 @@ layout_mode = 2
 text = "다시 실행"
 
 [node name="ErrorLabel" type="Label" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.35, 0.35, 1)
+autowrap_mode = 2
+
+[node name="ActionInspector" type="VBoxContainer" parent="InspectorPanel"]
+visible = false
+layout_mode = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 304.0
+offset_bottom = 344.0
+theme_override_constants/separation = 8
+
+[node name="ActionSelectedKeyframeLabel" type="Label" parent="InspectorPanel/ActionInspector"]
+layout_mode = 2
+text = "선택된 Action 키프레임: 없음"
+
+[node name="ActionTimeInput" type="SpinBox" parent="InspectorPanel/ActionInspector"]
+layout_mode = 2
+min_value = 0.0
+max_value = 1.0
+step = 0.03333333333333333
+prefix = "시각: "
+suffix = "초"
+
+[node name="ActionKeyInput" type="LineEdit" parent="InspectorPanel/ActionInspector"]
+layout_mode = 2
+placeholder_text = "ActionKey"
+
+[node name="ActionApplyButton" type="Button" parent="InspectorPanel/ActionInspector"]
+layout_mode = 2
+text = "Action 적용"
+
+[node name="ActionErrorLabel" type="Label" parent="InspectorPanel/ActionInspector"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.35, 0.35, 1)
+autowrap_mode = 2
+
+[node name="LockOnInspector" type="VBoxContainer" parent="InspectorPanel"]
+visible = false
+layout_mode = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 304.0
+offset_bottom = 344.0
+theme_override_constants/separation = 8
+
+[node name="LockOnSelectedKeyframeLabel" type="Label" parent="InspectorPanel/LockOnInspector"]
+layout_mode = 2
+text = "선택된 Lock-on 키프레임: 없음"
+
+[node name="LockTimeInput" type="SpinBox" parent="InspectorPanel/LockOnInspector"]
+layout_mode = 2
+min_value = 0.0
+max_value = 1.0
+step = 0.03333333333333333
+prefix = "시각: "
+suffix = "초"
+
+[node name="LockEnabledInput" type="CheckBox" parent="InspectorPanel/LockOnInspector"]
+layout_mode = 2
+text = "Lock-on 활성"
+
+[node name="LockTargetInput" type="OptionButton" parent="InspectorPanel/LockOnInspector"]
+layout_mode = 2
+
+[node name="LockModeInput" type="OptionButton" parent="InspectorPanel/LockOnInspector"]
+layout_mode = 2
+
+[node name="LockYawOffsetInput" type="SpinBox" parent="InspectorPanel/LockOnInspector"]
+layout_mode = 2
+min_value = -360000.0
+max_value = 360000.0
+step = 0.1
+prefix = "Yaw offset: "
+suffix = "°"
+
+[node name="LockApplyButton" type="Button" parent="InspectorPanel/LockOnInspector"]
+layout_mode = 2
+text = "Lock-on 적용"
+
+[node name="LockErrorLabel" type="Label" parent="InspectorPanel/LockOnInspector"]
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.35, 0.35, 1)
 autowrap_mode = 2

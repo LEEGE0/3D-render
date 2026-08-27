@@ -72,6 +72,16 @@ $requiredFiles = @(
     (Join-Path $projectRoot 'Features\Timeline\TimelineTimeFormatter.cs.uid'),
     (Join-Path $projectRoot 'Features\Timeline\TransformTrackLayout.cs'),
     (Join-Path $projectRoot 'Features\Timeline\TransformTrackSurface.cs'),
+    (Join-Path $projectRoot 'Features\Timeline\StepTrackLayout.cs'),
+    (Join-Path $projectRoot 'Features\Timeline\StepTrackLayout.cs.uid'),
+    (Join-Path $projectRoot 'Features\Timeline\ActionTrackSurface.cs'),
+    (Join-Path $projectRoot 'Features\Timeline\ActionTrackSurface.cs.uid'),
+    (Join-Path $projectRoot 'Features\Timeline\LockOnTrackSurface.cs'),
+    (Join-Path $projectRoot 'Features\Timeline\LockOnTrackSurface.cs.uid'),
+    (Join-Path $projectRoot 'Features\Timeline\SemanticTimelineController.cs'),
+    (Join-Path $projectRoot 'Features\Timeline\SemanticTimelineController.cs.uid'),
+    (Join-Path $projectRoot 'Features\Inspector\ActionLockOnInspectorController.cs'),
+    (Join-Path $projectRoot 'Features\Inspector\ActionLockOnInspectorController.cs.uid'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs.uid'),
     (Join-Path $sampleRoot 'synthetic-topview-v1.scene.json'),
@@ -91,7 +101,8 @@ $requiredFiles = @(
     (Join-Path $editorTestRoot 'WorldTransformMapperTests.cs'),
     (Join-Path $editorTestRoot 'RenderQueueTests.cs'),
     (Join-Path $editorTestRoot 'TimelineTimeFormatterTests.cs'),
-    (Join-Path $editorTestRoot 'TransformTrackLayoutTests.cs')
+    (Join-Path $editorTestRoot 'TransformTrackLayoutTests.cs'),
+    (Join-Path $editorTestRoot 'StepTrackLayoutTests.cs')
 )
 
 foreach ($requiredFile in $requiredFiles) {
@@ -126,6 +137,24 @@ function Assert-NotContains {
     }
 }
 
+function Assert-ScriptedSceneNode {
+    param(
+        [string]$Path,
+        [string]$Name,
+        [string]$Type,
+        [string]$Parent,
+        [string]$ScriptResourceId
+    )
+
+    $content = Get-Content -LiteralPath $Path -Raw
+    $declaration = [regex]::Escape('[node name="' + $Name + '" type="' + $Type + '" parent="' + $Parent + '"]')
+    $scriptAssignment = [regex]::Escape('script = ExtResource("' + $ScriptResourceId + '")')
+    $nodeBlockPattern = '(?ms)^' + $declaration + '\r?\n(?:(?!^\[node ).)*?^' + $scriptAssignment + '\r?$'
+    if ($content -notmatch $nodeBlockPattern) {
+        throw "script 연결 장면 노드 검증에 실패했습니다: $Parent/$Name -> $ScriptResourceId"
+    }
+}
+
 $projectFile = Join-Path $projectRoot 'project.godot'
 $csprojFile = Join-Path $projectRoot 'PvpGuide.Editor.csproj'
 $sceneFile = Join-Path $projectRoot 'Scenes\Main\Main.tscn'
@@ -139,6 +168,7 @@ $playbackTimeSourceFile = Join-Path $applicationRoot 'Playback\IPlaybackTimeSour
 $playbackClockFile = Join-Path $applicationRoot 'Playback\PlaybackClock.cs'
 $timelineTimeFormatterFile = Join-Path $projectRoot 'Features\Timeline\TimelineTimeFormatter.cs'
 $transformTrackLayoutFile = Join-Path $projectRoot 'Features\Timeline\TransformTrackLayout.cs'
+$stepTrackLayoutFile = Join-Path $projectRoot 'Features\Timeline\StepTrackLayout.cs'
 
 Assert-Contains $projectFile 'run/main_scene="res://Scenes/Main/Main\.tscn"' '메인 장면 설정'
 Assert-Contains $projectFile '"C#"' 'C# 기능 설정'
@@ -159,6 +189,7 @@ Assert-NotContains $playbackTimeSourceFile 'Godot|Node|Timer' 'IPlaybackTimeSour
 Assert-NotContains $playbackClockFile 'Godot|Node|Timer' 'PlaybackClock의 Godot 독립성'
 Assert-NotContains $timelineTimeFormatterFile 'Godot|Node|Control' 'TimelineTimeFormatter의 Godot 독립성'
 Assert-NotContains $transformTrackLayoutFile 'Godot|Node|Control|Vector' 'TransformTrackLayout의 Godot 독립성'
+Assert-NotContains $stepTrackLayoutFile 'Godot|Node|Control|Vector' 'StepTrackLayout의 Godot 독립성'
 
 foreach ($nodeName in @('TopViewPanel', 'WorldViewPanel', 'TimelinePanel', 'InspectorPanel')) {
     Assert-Contains $sceneFile ([regex]::Escape('name="' + $nodeName + '"')) "장면 노드 $nodeName"
@@ -195,9 +226,62 @@ foreach ($nodeName in @(
     'AddKeyframeButton',
     'DeleteKeyframeButton',
     'SelectedKeyframeLabel',
-    'TimeInput'
+    'TimeInput',
+    'ActionTrackSurface',
+    'LockOnTrackSurface',
+    'ActionToolbar',
+    'LockOnToolbar',
+    'ActionKeyInput',
+    'ActionTimeInput',
+    'LockEnabledInput',
+    'LockTargetInput',
+    'LockModeInput',
+    'LockYawOffsetInput',
+    'LockTimeInput',
+    'ActionApplyButton',
+    'LockApplyButton'
 )) {
     Assert-Contains $sceneFile ([regex]::Escape('name="' + $nodeName + '"')) "기본 편집 장면 노드 $nodeName"
 }
+
+$semanticSceneNodes = @(
+    @{ Name = 'ActionTrackSurface'; Type = 'Control'; Parent = 'TimelinePanel/TimelineControls' },
+    @{ Name = 'LockOnTrackSurface'; Type = 'Control'; Parent = 'TimelinePanel/TimelineControls' },
+    @{ Name = 'ActionToolbar'; Type = 'HBoxContainer'; Parent = 'TimelinePanel/TimelineControls' },
+    @{ Name = 'LockOnToolbar'; Type = 'HBoxContainer'; Parent = 'TimelinePanel/TimelineControls' },
+    @{ Name = 'ActionAddButton'; Type = 'Button'; Parent = 'TimelinePanel/TimelineControls/ActionToolbar' },
+    @{ Name = 'ActionDeleteButton'; Type = 'Button'; Parent = 'TimelinePanel/TimelineControls/ActionToolbar' },
+    @{ Name = 'LockOnAddButton'; Type = 'Button'; Parent = 'TimelinePanel/TimelineControls/LockOnToolbar' },
+    @{ Name = 'LockOnDeleteButton'; Type = 'Button'; Parent = 'TimelinePanel/TimelineControls/LockOnToolbar' },
+    @{ Name = 'TransformInspector'; Type = 'VBoxContainer'; Parent = 'InspectorPanel' },
+    @{ Name = 'ActionInspector'; Type = 'VBoxContainer'; Parent = 'InspectorPanel' },
+    @{ Name = 'ActionSelectedKeyframeLabel'; Type = 'Label'; Parent = 'InspectorPanel/ActionInspector' },
+    @{ Name = 'ActionKeyInput'; Type = 'LineEdit'; Parent = 'InspectorPanel/ActionInspector' },
+    @{ Name = 'ActionTimeInput'; Type = 'SpinBox'; Parent = 'InspectorPanel/ActionInspector' },
+    @{ Name = 'ActionApplyButton'; Type = 'Button'; Parent = 'InspectorPanel/ActionInspector' },
+    @{ Name = 'ActionErrorLabel'; Type = 'Label'; Parent = 'InspectorPanel/ActionInspector' },
+    @{ Name = 'LockOnInspector'; Type = 'VBoxContainer'; Parent = 'InspectorPanel' },
+    @{ Name = 'LockOnSelectedKeyframeLabel'; Type = 'Label'; Parent = 'InspectorPanel/LockOnInspector' },
+    @{ Name = 'LockTimeInput'; Type = 'SpinBox'; Parent = 'InspectorPanel/LockOnInspector' },
+    @{ Name = 'LockEnabledInput'; Type = 'CheckBox'; Parent = 'InspectorPanel/LockOnInspector' },
+    @{ Name = 'LockTargetInput'; Type = 'OptionButton'; Parent = 'InspectorPanel/LockOnInspector' },
+    @{ Name = 'LockModeInput'; Type = 'OptionButton'; Parent = 'InspectorPanel/LockOnInspector' },
+    @{ Name = 'LockYawOffsetInput'; Type = 'SpinBox'; Parent = 'InspectorPanel/LockOnInspector' },
+    @{ Name = 'LockApplyButton'; Type = 'Button'; Parent = 'InspectorPanel/LockOnInspector' },
+    @{ Name = 'LockErrorLabel'; Type = 'Label'; Parent = 'InspectorPanel/LockOnInspector' },
+    @{ Name = 'TimelineStatus'; Type = 'Label'; Parent = 'TimelinePanel/TimelineControls' }
+)
+
+foreach ($node in $semanticSceneNodes) {
+    $declaration = '[node name="' + $node.Name + '" type="' + $node.Type + '" parent="' + $node.Parent + '"]'
+    Assert-Contains $sceneFile ([regex]::Escape($declaration)) "semantic 장면 노드 $($node.Parent)/$($node.Name) 타입 $($node.Type)"
+}
+
+Assert-Contains $sceneFile '\[node name="ActionTrackSurface" type="Control" parent="TimelinePanel/TimelineControls"\]\r?\ncustom_minimum_size = Vector2\(0, 40\)' 'Action lane 최소 높이'
+Assert-Contains $sceneFile '\[node name="LockOnTrackSurface" type="Control" parent="TimelinePanel/TimelineControls"\]\r?\ncustom_minimum_size = Vector2\(0, 40\)' 'Lock-on lane 최소 높이'
+Assert-Contains $sceneFile ([regex]::Escape('[ext_resource type="Script" path="res://Features/Timeline/ActionTrackSurface.cs" id="4_action_track"]')) 'Action lane script resource'
+Assert-Contains $sceneFile ([regex]::Escape('[ext_resource type="Script" path="res://Features/Timeline/LockOnTrackSurface.cs" id="5_lock_on_track"]')) 'Lock-on lane script resource'
+Assert-ScriptedSceneNode $sceneFile 'ActionTrackSurface' 'Control' 'TimelinePanel/TimelineControls' '4_action_track'
+Assert-ScriptedSceneNode $sceneFile 'LockOnTrackSurface' 'Control' 'TimelinePanel/TimelineControls' '5_lock_on_track'
 
 Write-Output 'PROJECT_SKELETON_VERIFICATION=PASS'
