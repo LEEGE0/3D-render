@@ -295,7 +295,7 @@
 
   현재 사용자가 실행해 둔 Godot 인스턴스를 조작하지 않는다. 검증용 별도 프로세스를 Godot console executable로 실행해 Vulkan Forward+, marker, ERROR 부재를 확인하고, 새 타임라인 control·두 뷰·Inspector가 1280×720에서 겹치거나 잘리지 않는지 별도 화면 캡처로 확인한다.
 
-- [ ] **Step 6: fresh spec/quality 리뷰 후 메인이 최종 커밋·푸시한다**
+- [x] **Step 6: fresh spec/quality 리뷰 후 메인이 최종 커밋·푸시한다**
 
   spec 리뷰는 정확한 marker의 각 항목과 문서 범위를, quality 리뷰는 runtime self-test의 결함 탐지력·UI signal 실재성·cleanup·기존 표식 회귀를 확인한다. 수정 후 fresh 재리뷰와 전체 재검증을 반복한다.
 
@@ -305,6 +305,6 @@
   git push
   ```
 
-- [ ] **Step 7: 원격 상태와 clean tree를 확인한다**
+- [x] **Step 7: 원격 상태와 clean tree를 확인한다**
 
   `git status`, local HEAD, tracking ref, `git ls-remote` SHA가 일치하는지 확인한다. 사용자가 실제 조작 결과를 정상이라고 말하면 어떤 기능·시나리오인지 재확인한 뒤에만 `working/timeline-playback-YYYYMMDD-HHmm` 주석 태그를 생성·푸시한다.
