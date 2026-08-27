@@ -481,7 +481,7 @@ dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug 
 
   `git diff --check`, `git status --short`, `git diff --stat`를 확인한다. `local-assets/`, `tools/`, `cache/`, `exports/`, `.godot/`, 로그와 임시 검토 파일은 추적하지 않는다.
 
-- [ ] **Step 9: 메인 에이전트가 Task 5를 커밋·푸시하고 SHA를 검증한다**
+- [x] **Step 9: 메인 에이전트가 Task 5를 커밋·푸시하고 SHA를 검증한다**
 
   Exact stage paths: 위 여덟 파일과 리뷰로 승인된 잔여 수정 파일만 개별 지정한다.
 
