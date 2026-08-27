@@ -36,6 +36,11 @@ public sealed class LockOnKeyframe
             throw new ArgumentOutOfRangeException(nameof(yawOffsetDegrees), "Yaw offset must be finite.");
         }
 
+        if (!Enum.IsDefined(trackingMode))
+        {
+            throw new ArgumentOutOfRangeException(nameof(trackingMode), "Tracking mode must be defined.");
+        }
+
         Id = id;
         TimeSeconds = timeSeconds;
         Enabled = enabled;

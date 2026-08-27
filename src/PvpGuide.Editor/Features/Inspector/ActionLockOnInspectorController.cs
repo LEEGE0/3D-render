@@ -134,20 +134,22 @@ public sealed class ActionLockOnInspectorController : IDisposable
 
     private void ApplyAction()
     {
-        if (!_session.ActionEditAvailability.CanUpdate || _session.GetSelectedActionKeyframe() is null)
+        var revisionBefore = _session.CurrentRevision;
+        try
         {
-            ShowActionError(_session.ActionEditAvailability.UpdateLockReason ?? "Action 키프레임을 선택해야 합니다.");
-            return;
+            HandleActionResult(_session.UpdateSelectedActionKeyframeDetailed(
+                _actionTimeInput.Value,
+                _actionKeyInput.Text));
         }
-
-        var actionKey = _actionKeyInput.Text;
-        if (string.IsNullOrWhiteSpace(actionKey))
+        catch (Exception exception) when (SemanticEditMessageFormatter.ShouldHandleObserverFailure(
+            revisionBefore,
+            _session.CurrentRevision))
         {
-            ShowActionError("ActionKey는 공백일 수 없습니다.");
-            return;
+            RefreshPresentation();
+            ShowActionError(SemanticEditMessageFormatter.FormatObserverFailure(
+                "Action 적용",
+                exception.Message));
         }
-
-        HandleActionResult(_session.UpdateSelectedActionKeyframe(_actionTimeInput.Value, actionKey));
     }
 
     private void OnLockApplyPressed() => ApplyLockOn();
@@ -156,51 +158,55 @@ public sealed class ActionLockOnInspectorController : IDisposable
 
     private void ApplyLockOn()
     {
-        if (!_session.LockOnEditAvailability.CanUpdate || _session.GetSelectedLockOnKeyframe() is null)
+        var revisionBefore = _session.CurrentRevision;
+        try
         {
-            ShowLockError(_session.LockOnEditAvailability.UpdateLockReason ?? "Lock-on 키프레임을 선택해야 합니다.");
-            return;
+            HandleLockResult(_session.UpdateSelectedLockOnKeyframeDetailed(
+                _lockTimeInput.Value,
+                _lockEnabledInput.ButtonPressed,
+                ReadSelectedTargetActorId(),
+                _lockYawOffsetInput.Value,
+                ReadTrackingMode()));
         }
-
-        var targetActorId = ReadSelectedTargetActorId();
-        if (_lockEnabledInput.ButtonPressed && targetActorId is null)
+        catch (Exception exception) when (SemanticEditMessageFormatter.ShouldHandleObserverFailure(
+            revisionBefore,
+            _session.CurrentRevision))
         {
-            ShowLockError("활성 Lock-on에는 대상 배우가 필요합니다.");
-            return;
+            RefreshPresentation();
+            ShowLockError(SemanticEditMessageFormatter.FormatObserverFailure(
+                "Lock-on 적용",
+                exception.Message));
         }
-
-        HandleLockResult(_session.UpdateSelectedLockOnKeyframe(
-            _lockTimeInput.Value,
-            _lockEnabledInput.ButtonPressed,
-            targetActorId,
-            _lockYawOffsetInput.Value,
-            ReadTrackingMode()));
     }
 
-    private void HandleActionResult(SceneEditResult result)
+    private void HandleActionResult(SemanticEditOutcome outcome)
     {
-        if (result == SceneEditResult.Applied)
+        if (outcome.Result == SceneEditResult.Applied)
         {
             ClearActionError();
             return;
         }
 
-        ShowActionError(result == SceneEditResult.NoChange
-            ? "적용할 실제 Action 변경이 없습니다."
-            : "Action 변경이 오래되었거나 같은 시각의 키프레임과 충돌했습니다.");
+        ShowActionError(SemanticEditMessageFormatter.Format(
+            outcome,
+            TimelineTrackKind.Action,
+            "Action 적용",
+            _session.Playback.DurationSeconds));
     }
 
-    private void HandleLockResult(SceneEditResult result)
+    private void HandleLockResult(SemanticEditOutcome outcome)
     {
-        if (result == SceneEditResult.Applied)
+        if (outcome.Result == SceneEditResult.Applied)
         {
             ClearLockError();
             return;
         }
 
-        ShowLockError(result == SceneEditResult.NoChange
-            ? "적용할 실제 Lock-on 변경이 없습니다."
-            : "Lock-on 변경이 오래되었거나 시각·대상 제약과 충돌했습니다.");
+        ShowLockError(SemanticEditMessageFormatter.Format(
+            outcome,
+            TimelineTrackKind.LockOn,
+            "Lock-on 적용",
+            _session.Playback.DurationSeconds));
     }
 
     private void RefreshPresentation()

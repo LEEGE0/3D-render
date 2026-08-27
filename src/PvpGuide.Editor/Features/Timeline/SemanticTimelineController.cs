@@ -4,6 +4,7 @@ using PvpGuide.Application.Playback;
 using PvpGuide.Application.Sessions;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Timeline;
+using PvpGuide.Editor.Features.Inspector;
 
 namespace PvpGuide.Editor.Features.Timeline;
 
@@ -82,47 +83,33 @@ public sealed class SemanticTimelineController : IDisposable
 
     private void OnActionAddPressed()
     {
-        var actionKey = _actionKeyInput.Text;
-        if (string.IsNullOrWhiteSpace(actionKey))
-        {
-            ShowStatus("Action 추가 실패: ActionKey는 공백일 수 없습니다.");
-            return;
-        }
-
-        HandleResult(
-            _session.AddActionKeyframeAtCurrentTime(actionKey),
-            "Action 추가",
-            _session.ActionEditAvailability.AddLockReason);
+        HandleOperation(
+            () => _session.AddActionKeyframeAtCurrentTimeDetailed(_actionKeyInput.Text),
+            TimelineTrackKind.Action,
+            "Action 추가");
     }
 
-    private void OnActionDeletePressed() => HandleResult(
-        _session.RemoveSelectedActionKeyframe(),
-        "Action 삭제",
-        _session.ActionEditAvailability.DeleteLockReason);
+    private void OnActionDeletePressed() => HandleOperation(
+        _session.RemoveSelectedActionKeyframeDetailed,
+        TimelineTrackKind.Action,
+        "Action 삭제");
 
     private void OnLockOnAddPressed()
     {
-        var targetActorId = ReadSelectedTargetActorId();
-        if (_lockEnabledInput.ButtonPressed && targetActorId is null)
-        {
-            ShowStatus("Lock-on 추가 실패: 활성 Lock-on에는 대상 배우가 필요합니다.");
-            return;
-        }
-
-        HandleResult(
-            _session.AddLockOnKeyframeAtCurrentTime(
+        HandleOperation(
+            () => _session.AddLockOnKeyframeAtCurrentTimeDetailed(
                 _lockEnabledInput.ButtonPressed,
-                targetActorId,
+                ReadSelectedTargetActorId(),
                 _lockYawOffsetInput.Value,
                 ReadTrackingMode()),
-            "Lock-on 추가",
-            _session.LockOnEditAvailability.AddLockReason);
+            TimelineTrackKind.LockOn,
+            "Lock-on 추가");
     }
 
-    private void OnLockOnDeletePressed() => HandleResult(
-        _session.RemoveSelectedLockOnKeyframe(),
-        "Lock-on 삭제",
-        _session.LockOnEditAvailability.DeleteLockReason);
+    private void OnLockOnDeletePressed() => HandleOperation(
+        _session.RemoveSelectedLockOnKeyframeDetailed,
+        TimelineTrackKind.LockOn,
+        "Lock-on 삭제");
 
     private string? ReadSelectedTargetActorId() => _lockTargetInput.Selected <= 0
         ? null
@@ -136,16 +123,29 @@ public sealed class SemanticTimelineController : IDisposable
             : LockOnTrackingMode.Continuous;
     }
 
-    private void HandleResult(SceneEditResult result, string actionName, string? lockReason)
+    private void HandleOperation(
+        Func<SemanticEditOutcome> operation,
+        TimelineTrackKind track,
+        string actionName)
     {
-        RefreshAvailability();
-        ShowStatus(result switch
+        var revisionBefore = _session.CurrentRevision;
+        try
         {
-            SceneEditResult.Applied => $"{actionName} 완료",
-            SceneEditResult.NoChange => $"{actionName}: 적용할 변경이 없습니다.",
-            SceneEditResult.Conflict => $"{actionName} 실패: {lockReason ?? "최신 문서 상태와 충돌했습니다."}",
-            _ => throw new InvalidOperationException($"알 수 없는 편집 결과입니다: {result}"),
-        });
+            var outcome = operation();
+            RefreshAvailability();
+            ShowStatus(SemanticEditMessageFormatter.Format(
+                outcome,
+                track,
+                actionName,
+                _session.Playback.DurationSeconds));
+        }
+        catch (Exception exception) when (SemanticEditMessageFormatter.ShouldHandleObserverFailure(
+            revisionBefore,
+            _session.CurrentRevision))
+        {
+            RefreshAvailability();
+            ShowStatus(SemanticEditMessageFormatter.FormatObserverFailure(actionName, exception.Message));
+        }
     }
 
     private void RefreshAvailability()

@@ -7,6 +7,18 @@ namespace PvpGuide.Domain.Tests;
 
 public sealed class SceneDocumentTests
 {
+    [Fact]
+    public void Lock_on_keyframe_rejects_undefined_tracking_mode()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new LockOnKeyframe(
+            "lock",
+            1,
+            false,
+            null,
+            0,
+            (LockOnTrackingMode)99));
+    }
+
     private static readonly double[] NonFiniteValues = [double.NaN, double.PositiveInfinity, double.NegativeInfinity];
 
     [Fact]

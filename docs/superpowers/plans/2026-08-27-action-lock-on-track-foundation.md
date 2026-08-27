@@ -588,6 +588,8 @@ Fix Round 4에서는 호출 시 active frame이 observer에 의해 다른 시각
 
 Fix Round 5에서는 `Playback.Changed` callback의 공개 time/playing이 현재 payload와 정확히 일치하도록 게시 state와 FIFO 요청 tail을 분리한다. 재진입 Pause 뒤 Seek는 tail의 paused 상태를 유지하며, 뒤 observer가 예외를 내도 앞 observer가 수락시킨 state와 rollback actor-selection work를 모두 적용·게시한 뒤 최초 observer 예외를 다시 낸다. 32회 bounded 비안정화는 observer 예외보다 우선하고 callback depth 1을 유지한다.
 
+Final whole-milestone review fixes에서는 빈 Action/Lock-on lane 배경을 실제 viewport input으로 클릭해 document/history/playback mutation 없이 첫 Add Inspector를 여는 경로를 추가한다. semantic session은 no-op·duplicate·stale·range·target/yaw/mode를 구분하는 typed outcome을 반환한다. 두 semantic controller는 revision 전후를 비교해 mutation-after-observer만 UI 안내로 처리하고 revision이 증가하지 않은 예기치 않은 예외는 그대로 전파한다. Action/Lock-on marker 선택은 두 번 연속 다른 시각으로 리디렉션돼도 최신 target을 다시 시도하는 bounded 안정화 루프로 바꾸며 최종 state가 target과 다르면 `Applied`를 반환하지 않는다. per-attempt selection publication sequence/signature와 active context를 사용해 최종 target full payload 중복을 제거하면서 same-time 무-seek 및 rollback 뒤 이동 frame 보존 상태의 강제 1회와 final event active-track 교란 뒤 재게시를 보존한다. Domain은 정의되지 않은 `LockOnTrackingMode`를 거부하고 결정적 ID는 기존 `{actorId}-lock-on-{ordinal:D4}` 규약을 유지한다.
+
 - [x] **Step 3: runtime script marker RED를 확인한다**
 
 `Test-GodotRuntime.ps1`의 required marker 마지막에 다음 exact 문자열을 먼저 추가한다.
@@ -595,6 +597,7 @@ Fix Round 5에서는 `Playback.Changed` callback의 공개 time/playing이 현�
 ```text
 ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1
 ACTION_LOCK_ON_PLAYBACK_GUARDS_READY action_add=1 action_apply=1 action_delete=1 lock_add=1 lock_apply=1 lock_delete=1 undo=1 redo=1
+ACTION_LOCK_ON_REVIEW_FIXES_READY empty_action_add=1 empty_lock_add=1 detailed_errors=1 observer_commit=1
 ```
 
 Run: `& .\scripts\Test-GodotRuntime.ps1`
@@ -603,7 +606,7 @@ Expected: FAIL — 새 marker 없음.
 
 - [x] **Step 4: hand-derived runtime assertion을 완성한다**
 
-문서 fixture의 marker time과 left-hold 결과를 코드 결과에서 읽어 기대값으로 사용하지 않는다. 각 성공 mutation/Undo/Redo의 revision, history event, selection ID/time, 두 projection apply count와 overlay node text/visibility를 독립 계산해 assertion한다. Top overlay는 probe에서 layout을 재계산하지 않고 `TopViewSurface.DisplayedSemanticOverlays`의 실제 consumed state를 확인한다. 실패·no-op·여덟 playback lock signal은 revision/history/apply count 불변을 검증한다. 양방향 cross-time seek는 revision/history `28/12`를 유지하고 Top/World apply count를 hand-derived `53→54→55`로 늘린다. 이후 0.2초 scrub과 실제 Action Add는 `29/13`, apply `57/57`을 만들고 same-time 두 surface click은 그 값을 바꾸지 않는다.
+문서 fixture의 marker time과 left-hold 결과를 코드 결과에서 읽어 기대값으로 사용하지 않는다. 각 성공 mutation/Undo/Redo의 revision, history event, selection ID/time, 두 projection apply count와 overlay node text/visibility를 독립 계산해 assertion한다. Top overlay는 probe에서 layout을 재계산하지 않고 `TopViewSurface.DisplayedSemanticOverlays`의 실제 consumed state를 확인한다. 실패·no-op·여덟 playback lock signal은 revision/history/apply count 불변을 검증한다. observer 예외 뒤에도 확정되는 Lock-on Apply 한 건을 포함해 playback guard 종료는 `29/13`, apply `54/54`다. 양방향 cross-time seek는 revision/history `29/13`을 유지하고 Top/World apply count를 hand-derived `54→55→56`으로 늘린다. 이후 0.2초 scrub과 실제 Action Add는 `30/14`, apply `58/58`을 만들고 same-time 두 surface click과 duplicate Add 실패는 그 값을 바꾸지 않는다.
 
 - [x] **Step 5: schema 검증 계층을 분리한다**
 

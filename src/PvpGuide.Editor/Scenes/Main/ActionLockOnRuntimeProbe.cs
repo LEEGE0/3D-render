@@ -65,16 +65,35 @@ internal static class ActionLockOnRuntimeProbe
             Require(worldAdapter.ActorCount == 2,
                 "target actor 추가 뒤 WorldView actor 수가 2가 아닙니다.");
 
+            ClickBackground(actionTrackSurface);
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 16, 0, 33,
+                "빈 Action lane 진입");
+            Require(session.ActiveTimelineTrack == TimelineTrackKind.Action &&
+                    actionInspector.Visible && actionKeyInput.IsVisibleInTree() &&
+                    actionAddButton.IsVisibleInTree() && !actionAddButton.Disabled,
+                "빈 Action lane viewport click이 첫 Add용 Inspector/input/button을 표시하지 않았습니다.");
+
             actionKeyInput.Text = "windup";
-            actionAddButton.EmitSignal(Button.SignalName.Pressed);
+            var detachActionAddObserver = AttachOneShotChangedFailure(document, "action add observer failed");
+            try
+            {
+                actionAddButton.EmitSignal(Button.SignalName.Pressed);
+            }
+            finally
+            {
+                detachActionAddObserver();
+            }
+
             var addedAction = document.GetActionKeyframe(ActorId, ActionId);
             RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 17, 1, 34,
                 "Action Add");
             Require(IsAction(addedAction, 0, "windup") &&
                     session.SelectedActionKeyframeId == ActionId &&
                     session.ActiveTimelineTrack == TimelineTrackKind.Action &&
-                    timelineStatus.Text == "Action 추가 완료",
-                "Action Add signal이 hand-derived frame/selection/status를 만들지 않았습니다.");
+                    timelineStatus.Text.Contains(
+                        "변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다: action add observer failed",
+                        StringComparison.Ordinal),
+                "Action Add signal의 mutation-after-observer 상태가 저장·안내되지 않았습니다.");
 
             ClickMarker(actionTrackSurface, 0);
             Require(session.SelectedActionKeyframeId == ActionId &&
@@ -87,6 +106,13 @@ internal static class ActionLockOnRuntimeProbe
             RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 17, 1, 34,
                 "Action marker click");
 
+            SetSpinBoxValue(actionTimeInput, 2, "Action out-of-range time");
+            actionApplyButton.EmitSignal(Button.SignalName.Pressed);
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 17, 1, 34,
+                "Action range validation");
+            Require(actionErrorLabel.Text.Contains("시각은 0초 이상", StringComparison.Ordinal),
+                "Action 범위 오류가 별도 한글 안내로 표시되지 않았습니다.");
+
             SetSpinBoxValue(actionTimeInput, 0.2, "Action time");
             actionKeyInput.Text = "attack";
             actionApplyButton.EmitSignal(Button.SignalName.Pressed);
@@ -97,7 +123,7 @@ internal static class ActionLockOnRuntimeProbe
                     session.SelectedActionKeyframeId == ActionId &&
                     IsNear(session.Playback.CurrentTimeSeconds, 0.2) &&
                     actionErrorLabel.Text.Length == 0,
-                "Action Apply 버튼이 time/key를 하나의 mutation으로 적용하지 않았습니다.");
+                "Action Apply 버튼이 time/key를 적용하고 이전 오류를 지우지 않았습니다.");
 
             actionKeyInput.EmitSignal(LineEdit.SignalName.TextSubmitted, "attack");
             RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 18, 2, 36,
@@ -146,8 +172,16 @@ internal static class ActionLockOnRuntimeProbe
             RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 21, 5, 43,
                 "Action Delete");
             Require(document.Actors.Single(actor => actor.ActorId == ActorId).ActionKeyframes.Count == 0 &&
-                    session.SelectedActionKeyframeId is null,
+                     session.SelectedActionKeyframeId is null,
                 "Action Delete가 선택 frame을 제거하지 않았습니다.");
+
+            ClickBackground(lockOnTrackSurface);
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 21, 5, 43,
+                "빈 Lock-on lane 진입");
+            Require(session.ActiveTimelineTrack == TimelineTrackKind.LockOn &&
+                    lockOnInspector.Visible && lockEnabledInput.IsVisibleInTree() &&
+                    lockOnAddButton.IsVisibleInTree() && !lockOnAddButton.Disabled,
+                "빈 Lock-on lane viewport click이 첫 Add용 Inspector/input/button을 표시하지 않았습니다.");
 
             Require(lockTargetInput.ItemCount == 2 && lockTargetInput.GetItemText(1) == TargetActorId,
                 "Lock-on target OptionButton이 두 번째 actor를 정확히 노출하지 않았습니다.");
@@ -179,11 +213,44 @@ internal static class ActionLockOnRuntimeProbe
             RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 22, 6, 44,
                 "Lock-on marker click");
 
+            SelectOption(lockTargetInput, 0, "invalid Lock-on target");
+            lockApplyButton.EmitSignal(Button.SignalName.Pressed);
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 22, 6, 44,
+                "Lock-on target validation");
+            Require(lockErrorLabel.Text.Contains("같은 문서의 다른 배우", StringComparison.Ordinal),
+                "Lock-on 대상 오류가 별도 한글 안내로 표시되지 않았습니다.");
+
+            SelectOption(lockTargetInput, 1, "restored Lock-on target");
+            SetSpinBoxValue(lockYawOffsetInput, 20, "observer Lock-on yaw offset");
+            var detachLockApplyObserver = AttachOneShotChangedFailure(document, "lock apply observer failed");
+            try
+            {
+                lockApplyButton.EmitSignal(Button.SignalName.Pressed);
+            }
+            finally
+            {
+                detachLockApplyObserver();
+            }
+
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 23, 7, 45,
+                "Lock-on observer Apply");
+            Require(IsLock(
+                        document.GetLockOnKeyframe(ActorId, LockOnId),
+                        0.2,
+                        true,
+                        TargetActorId,
+                        20,
+                        LockOnTrackingMode.Continuous) &&
+                    lockErrorLabel.Text.Contains(
+                        "변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다: lock apply observer failed",
+                        StringComparison.Ordinal),
+                "Lock-on mutation-after-observer 상태가 저장·안내되지 않았습니다.");
+
             SelectOption(lockModeInput, (int)LockOnTrackingMode.Snap, "Lock-on Snap mode");
             SetSpinBoxValue(lockYawOffsetInput, -30, "Lock-on updated yaw offset");
             lockApplyButton.EmitSignal(Button.SignalName.Pressed);
             var updatedLock = document.GetLockOnKeyframe(ActorId, LockOnId);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 23, 7, 45,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 24, 8, 46,
                 "Lock-on Apply");
             Require(IsLock(updatedLock, 0.2, true, TargetActorId, -30, LockOnTrackingMode.Snap) &&
                     session.SelectedLockOnKeyframeId == LockOnId && lockErrorLabel.Text.Length == 0,
@@ -193,14 +260,14 @@ internal static class ActionLockOnRuntimeProbe
                     undoButton.IsVisibleInTree() && !undoButton.Disabled,
                 "Lock-on track에서 global Undo 버튼이 표시·활성화되지 않았습니다.");
             undoButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 24, 8, 46,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 25, 9, 47,
                 "Lock-on Apply Undo");
             Require(IsLock(
                         document.GetLockOnKeyframe(ActorId, LockOnId),
                         0.2,
                         true,
                         TargetActorId,
-                        15,
+                        20,
                         LockOnTrackingMode.Continuous) &&
                     session.SelectedLockOnKeyframeId == LockOnId &&
                     session.ActiveTimelineTrack == TimelineTrackKind.LockOn &&
@@ -208,7 +275,7 @@ internal static class ActionLockOnRuntimeProbe
                 "Lock-on track의 Undo가 continuous/offset preimage/global Redo를 복원하지 않았습니다.");
 
             redoButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 25, 9, 47,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 26, 10, 48,
                 "Lock-on Apply Redo");
             Require(IsLock(
                         document.GetLockOnKeyframe(ActorId, LockOnId),
@@ -222,7 +289,7 @@ internal static class ActionLockOnRuntimeProbe
                 "Lock-on track의 Redo가 snap/offset postimage를 복원하지 않았습니다.");
 
             lockOnDeleteButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 26, 10, 48,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 27, 11, 49,
                 "Lock-on Delete");
             Require(document.Actors.Single(actor => actor.ActorId == ActorId).LockOnKeyframes.Count == 0 &&
                     session.SelectedLockOnKeyframeId is null,
@@ -232,7 +299,7 @@ internal static class ActionLockOnRuntimeProbe
                     undoButton.IsVisibleInTree() && !undoButton.Disabled,
                 "Lock-on Delete 뒤 global Undo 버튼이 Lock-on track에서 활성화되지 않았습니다.");
             undoButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 27, 11, 49,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 50,
                 "Lock-on Delete Undo");
             Require(IsLock(
                         document.GetLockOnKeyframe(ActorId, LockOnId),
@@ -245,7 +312,7 @@ internal static class ActionLockOnRuntimeProbe
                 "Lock-on Delete Undo가 overlay 확인용 frame을 복원하지 않았습니다.");
 
             Scrub(timeSlider, 0.75);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 27, 11, 50,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 51,
                 "Lock-on left-hold scrub");
             Require(IsNear(session.Playback.CurrentTimeSeconds, 0.75) &&
                     session.SelectedLockOnKeyframeId is null,
@@ -277,7 +344,7 @@ internal static class ActionLockOnRuntimeProbe
             lockOnAddButton.EmitSignal(Button.SignalName.Pressed);
             undoButton.EmitSignal(Button.SignalName.Pressed);
             redoButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 27, 11, 50,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 51,
                 "semantic Add/global history playback lock");
             Require(timelineStatus.Text.Contains("재생 중", StringComparison.Ordinal) &&
                     historyErrorLabel.Text.Contains("재생 중", StringComparison.Ordinal),
@@ -287,11 +354,11 @@ internal static class ActionLockOnRuntimeProbe
             Require(!session.Playback.IsPlaying && !actionAddButton.Disabled && !lockOnAddButton.Disabled &&
                     !undoButton.Disabled && !redoButton.Disabled,
                 "재생 해제가 semantic Add/global history 가용성을 복원하지 않았습니다.");
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 27, 11, 50,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 51,
                 "semantic Add/global history playback unlock");
 
             ClickMarker(lockOnTrackSurface, 0.2);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 27, 11, 51,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 52,
                 "Lock-on playback guard marker");
             Require(session.ActiveTimelineTrack == TimelineTrackKind.LockOn && lockOnInspector.Visible &&
                     !lockApplyButton.Disabled && !lockOnDeleteButton.Disabled,
@@ -306,7 +373,7 @@ internal static class ActionLockOnRuntimeProbe
             SetSpinBoxValue(lockYawOffsetInput, 15, "재생 중 Lock Apply offset");
             lockApplyButton.EmitSignal(Button.SignalName.Pressed);
             lockOnDeleteButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 27, 11, 51,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 52,
                 "Lock-on Apply/Delete playback lock");
             Require(lockErrorLabel.Text.Contains("재생 중", StringComparison.Ordinal) &&
                     timelineStatus.Text.Contains("재생 중", StringComparison.Ordinal) &&
@@ -322,13 +389,13 @@ internal static class ActionLockOnRuntimeProbe
             Require(!session.Playback.IsPlaying, "Lock-on playback guard 뒤 paused 상태를 복원하지 못했습니다.");
 
             Scrub(timeSlider, 0.75);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 27, 11, 52,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 53,
                 "Action playback guard 준비 scrub");
             actionKeyInput.Text = "guarded-action";
             Require(!actionAddButton.Disabled,
                 "재생 전 Action Add가 가능한 빈 exact time을 복원하지 못했습니다.");
             actionAddButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 53,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 29, 13, 54,
                 "playback guard용 Action 준비");
             Require(IsAction(document.GetActionKeyframe(ActorId, ActionId), 0.75, "guarded-action") &&
                     session.ActiveTimelineTrack == TimelineTrackKind.Action && actionInspector.Visible &&
@@ -344,19 +411,19 @@ internal static class ActionLockOnRuntimeProbe
             actionKeyInput.Text = "guarded-update";
             actionApplyButton.EmitSignal(Button.SignalName.Pressed);
             actionDeleteButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 53,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 29, 13, 54,
                 "Action Apply/Delete playback lock");
             Require(actionErrorLabel.Text.Contains("재생 중", StringComparison.Ordinal) &&
                     timelineStatus.Text.Contains("재생 중", StringComparison.Ordinal) &&
                     IsAction(document.GetActionKeyframe(ActorId, ActionId), 0.75, "guarded-action"),
                 "재생 중 Action Apply/Delete가 잠금 사유와 committed frame을 보존하지 않았습니다.");
             playPauseButton.EmitSignal(Button.SignalName.Pressed);
-            Require(!session.Playback.IsPlaying && document.Revision == 28 && historyEvents == 12 &&
-                    topViewSurface.ApplyCount == 53 && worldAdapter.ApplyCount == 53,
+            Require(!session.Playback.IsPlaying && document.Revision == 29 && historyEvents == 13 &&
+                    topViewSurface.ApplyCount == 54 && worldAdapter.ApplyCount == 54,
                 "semantic playback guard 검증의 pause가 상태를 변경했습니다.");
 
             ClickMarker(lockOnTrackSurface, 0.2);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 54,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 29, 13, 55,
                 "Action에서 Lock-on cross-track marker 전환");
             Require(session.ActiveTimelineTrack == TimelineTrackKind.LockOn &&
                     session.SelectedLockOnKeyframeId == LockOnId &&
@@ -366,7 +433,7 @@ internal static class ActionLockOnRuntimeProbe
                 "Lock-on Inspector만 표시되지 않았습니다.");
 
             ClickMarker(actionTrackSurface, 0.75);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 55,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 29, 13, 56,
                 "Lock-on에서 Action cross-track marker 전환");
             Require(session.ActiveTimelineTrack == TimelineTrackKind.Action &&
                     session.SelectedActionKeyframeId == ActionId &&
@@ -376,13 +443,13 @@ internal static class ActionLockOnRuntimeProbe
                 "Action Inspector만 표시되지 않았습니다.");
 
             Scrub(timeSlider, 0.2);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 28, 12, 56,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 29, 13, 57,
                 "same-time semantic marker 준비 scrub");
             actionKeyInput.Text = "same-time-action";
             Require(!actionAddButton.Disabled,
                 "Lock-on marker와 같은 0.2초에 Action을 추가할 수 있는 상태가 아닙니다.");
             actionAddButton.EmitSignal(Button.SignalName.Pressed);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 29, 13, 57,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 30, 14, 58,
                 "same-time Action marker 추가");
             var sameTimeAction = document.GetActionKeyframe(ActorId, SameTimeActionId);
             Require(sameTimeAction.Id == SameTimeActionId &&
@@ -397,7 +464,7 @@ internal static class ActionLockOnRuntimeProbe
                 $"actionVisible:{actionInspector.Visible},lockVisible:{lockOnInspector.Visible}");
 
             ClickMarker(lockOnTrackSurface, 0.2);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 29, 13, 57,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 30, 14, 58,
                 "same-time Action에서 Lock-on marker 전환");
             Require(session.ActiveTimelineTrack == TimelineTrackKind.LockOn &&
                     session.SelectedLockOnKeyframeId == LockOnId &&
@@ -407,7 +474,7 @@ internal static class ActionLockOnRuntimeProbe
                 "Lock-on Inspector만 표시되지 않았습니다.");
 
             ClickMarker(actionTrackSurface, 0.2);
-            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 29, 13, 57,
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 30, 14, 58,
                 "same-time Lock-on에서 Action marker 전환");
             Require(session.ActiveTimelineTrack == TimelineTrackKind.Action &&
                     session.SelectedActionKeyframeId == SameTimeActionId &&
@@ -416,12 +483,25 @@ internal static class ActionLockOnRuntimeProbe
                 "같은 0.2초 Lock-on에서 실제 Action surface marker를 클릭했을 때 " +
                 "Action Inspector만 표시되지 않았습니다.");
 
+            SetSpinBoxValue(actionTimeInput, 0.75, "duplicate Action time");
+            actionApplyButton.EmitSignal(Button.SignalName.Pressed);
+            RequireState(document, session, topViewSurface, worldAdapter, historyEvents, 30, 14, 58,
+                "Action duplicate-time validation");
+            Require(actionErrorLabel.Text.Contains(
+                    "해당 시각에는 이미 Action 키프레임이 있습니다.",
+                    StringComparison.Ordinal),
+                "Action 동일 시각 중복이 stale/range와 구분된 한글 안내로 표시되지 않았습니다.");
+            SetSpinBoxValue(actionTimeInput, 0.2, "restored Action time");
+
             GD.Print(
                 "ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 " +
                 "undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1");
             GD.Print(
                 "ACTION_LOCK_ON_PLAYBACK_GUARDS_READY action_add=1 action_apply=1 action_delete=1 " +
                 "lock_add=1 lock_apply=1 lock_delete=1 undo=1 redo=1");
+            GD.Print(
+                "ACTION_LOCK_ON_REVIEW_FIXES_READY empty_action_add=1 empty_lock_add=1 " +
+                "detailed_errors=1 observer_commit=1");
         }
         finally
         {
@@ -615,6 +695,28 @@ internal static class ActionLockOnRuntimeProbe
             surface.Size.Y / 2);
         PushViewportLeftButton(surface, localPosition, pressed: true);
         PushViewportLeftButton(surface, localPosition, pressed: false);
+    }
+
+    private static void ClickBackground(Control surface)
+    {
+        Require(float.IsFinite(surface.Size.X) && surface.Size.X > MarkerPadding * 2 &&
+                float.IsFinite(surface.Size.Y) && surface.Size.Y > 0,
+            "semantic background click을 위한 track surface 크기가 올바르지 않습니다.");
+        var localPosition = new Vector2(surface.Size.X * 0.8f, surface.Size.Y / 2);
+        PushViewportLeftButton(surface, localPosition, pressed: true);
+        PushViewportLeftButton(surface, localPosition, pressed: false);
+    }
+
+    private static Action AttachOneShotChangedFailure(SceneDocument document, string message)
+    {
+        EventHandler<SceneDocumentChangedEventArgs>? observer = null;
+        observer = (_, _) =>
+        {
+            document.Changed -= observer;
+            throw new InvalidOperationException(message);
+        };
+        document.Changed += observer;
+        return () => document.Changed -= observer;
     }
 
     private static void PushViewportLeftButton(Control control, Vector2 localPosition, bool pressed)

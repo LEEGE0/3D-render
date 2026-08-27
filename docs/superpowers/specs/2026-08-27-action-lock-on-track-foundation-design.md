@@ -80,7 +80,7 @@ public sealed record EvaluatedLockOnState(
     LockOnTrackingMode TrackingMode);
 ```
 
-Lock-on도 left-hold로 평가한다. 첫 keyframe 이전과 빈 트랙은 disabled, target null, offset 0, mode `Continuous`다. `Enabled=true`이면 다른 기존 actor target이 필수다. disabled 상태는 가져온 가이드의 후보 target을 보존할 수 있다. target은 자기 자신일 수 없다. `YawOffsetDegrees`는 유한해야 하고 저장 시 `[-180, 180)`으로 정규화한다.
+Lock-on도 left-hold로 평가한다. 첫 keyframe 이전과 빈 트랙은 disabled, target null, offset 0, mode `Continuous`다. `Enabled=true`이면 다른 기존 actor target이 필수다. disabled 상태는 가져온 가이드의 후보 target을 보존할 수 있다. target은 자기 자신일 수 없다. `YawOffsetDegrees`는 유한해야 하고 저장 시 `[-180, 180)`으로 정규화한다. 공개 생성 경로는 `Enum.IsDefined`로 정의되지 않은 `LockOnTrackingMode` 값도 거부한다.
 
 tracking mode의 foundation 의미는 다음과 같다.
 
@@ -156,7 +156,7 @@ public string? SelectedActionKeyframeId { get; }
 public string? SelectedLockOnKeyframeId { get; }
 ```
 
-각 marker click은 playback을 pause하고 keyframe time으로 seek하며 해당 트랙을 active로 만든다. actor selection이 바뀌면 세 트랙 selection을 새 actor의 현재 시각 exact marker 기준으로 조정한다. playback seek는 현재 시각과 정확히 일치하지 않는 active marker selection을 해제하지만 evaluated state는 계속 제공한다.
+각 marker click은 playback을 pause하고 keyframe time으로 seek하며 해당 트랙을 active로 만든다. observer가 seek를 다른 시각으로 연속 리디렉션할 수 있으므로 최신 문서의 target actor/frame을 다시 읽는 bounded 안정화 루프를 사용하고, 최종 actor/time/playing/active track/ID/full payload가 모두 target과 일치할 때만 성공한다. 각 attempt 시작 시 track별 selection publication sequence와 active context를 캡처하고, 이후 게시된 마지막 actor/track/ID/immutable full-frame 서명이 target과 정확히 같은지를 확인한다. seek state change 자체는 게시 증거가 아니며 이 attempt 증거를 다음 attempt로 누적하지 않아 최종 안정 target payload를 정확히 한 번 게시한다. seek가 없는 same-time cross-track 전환과 rollback 뒤 다른 시각으로 이동한 frame의 ID/full selection 보존 상태는 실제 target 게시가 없으면 target payload를 한 번 강제하고, final event observer가 active track을 바꾸면 target context 복원 뒤 다시 게시한다. 안정화되지 않거나 target이 사라지면 호출 전 actor/time/playing/track/세 selection을 원자적으로 복구하고 성공을 반환하지 않는다. actor selection이 바뀌면 세 트랙 selection을 새 actor의 현재 시각 exact marker 기준으로 조정한다. playback seek는 현재 시각과 정확히 일치하지 않는 active marker selection을 해제하지만 evaluated state는 계속 제공한다.
 
 Undo/Redo reconciliation은 트랙마다 `기존 ID 보존 → 현재 시각 exact → 가장 가까운 marker → null` 순이다. nearest tie는 더 이른 time, 그다음 ordinal ID다. action/lock track이 비면 null이 정상이다.
 
@@ -181,7 +181,7 @@ SceneEditResult UpdateSelectedLockOnKeyframe(
 SceneEditResult RemoveSelectedLockOnKeyframe();
 ```
 
-ID는 `{actorId}-action-{ordinal:D4}`, `{actorId}-lock-{ordinal:D4}`로 충돌 없이 생성한다. 재생 중 모든 semantic CRUD를 잠근다. Add는 현재 시각에 같은 트랙 marker가 있으면 잠긴다. Update/Delete는 해당 active marker가 현재 시각에 정확히 선택됐을 때만 가능하다. action/lock은 마지막 marker도 삭제할 수 있다.
+ID는 `{actorId}-action-{ordinal:D4}`, `{actorId}-lock-on-{ordinal:D4}`로 충돌 없이 생성한다. 이미 저장된 `lock-on` 규약은 변경하거나 migration하지 않는다. 재생 중 모든 semantic CRUD를 잠근다. Add는 현재 시각에 같은 트랙 marker가 있으면 잠긴다. Update/Delete는 해당 active marker가 현재 시각에 정확히 선택됐을 때만 가능하다. action/lock은 마지막 marker도 삭제할 수 있다.
 
 Undo/Redo 자체의 가용성은 transform 편집 가능 여부에 종속시키지 않는다. 선택 actor가 있고 playback이 정지됐으며 stack이 있으면 active track과 무관하게 실행할 수 있다. 실행 후 트랙별 reconciliation이 실제 문서 상태를 복원한다.
 
@@ -195,6 +195,7 @@ Undo/Redo 자체의 가용성은 transform 편집 가능 여부에 종속시키�
 - Lock-on lane: enabled segment는 강조색과 target label, disabled segment는 muted 색, mode 축약 label.
 - 선택 marker는 fill, 현재 head exact marker는 별도 outline으로 구분한다.
 - marker와 segment 좌표·clipping·hit-test는 Godot 독립 `StepTrackLayout`에서 계산한다.
+- marker가 없는 Action/Lock-on lane의 빈 배경 click은 해당 트랙만 active로 바꿔 첫 Add Inspector를 표시하며 document/history/playback을 바꾸지 않는다.
 
 Godot surface는 draw와 실제 pointer event 전달만 담당하며 mutation 규칙을 재계산하지 않는다.
 
@@ -219,7 +220,7 @@ Lock-on section:
 - YawOffset SpinBox
 - Add, Apply, Delete
 
-Time step은 문서 FPS에서 계산한다. Enter/Apply는 time과 semantic 값을 하나의 command로 확정한다. semantic 필드는 transform처럼 뷰 preview를 만들지 않고 Apply 전까지 로컬 입력으로만 유지한다. 선택·playback·문서 변경 시 committed 값을 다시 읽으며 stale, duplicate, range, target, no-op을 한글로 구분한다.
+Time step은 문서 FPS에서 계산한다. Enter/Apply는 time과 semantic 값을 하나의 command로 확정한다. semantic 필드는 transform처럼 뷰 preview를 만들지 않고 Apply 전까지 로컬 입력으로만 유지한다. 선택·playback·문서 변경 시 committed 값을 다시 읽으며 typed outcome으로 stale, duplicate, range, target/mode, no-op을 한글로 구분한다. mutation observer가 예외를 던지면 controller는 호출 전후 revision을 비교해 mutation이 확정된 경우 `변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다: ...`로 안내한다. revision이 증가하지 않은 예기치 않은 예외는 catch하지 않고 그대로 전파한다.
 
 ### 8.3 TopView·3D overlay
 
@@ -256,10 +257,12 @@ WorldView는 기존 actor `OverlayRoot` 아래에 action `Label3D`, lock target/
 
 - `StepTrackLayout`의 marker/segment 좌표, clipping, tie-break, zero/narrow width.
 - 실제 Action/Lock-on marker click, Add/Apply/Delete, Undo/Redo signal.
+- 실제 빈 lane background click, 보이는 입력·Add signal, typed validation/no-op과 mutation-after-observer 안내.
 - transform exact marker를 그대로 보존하고 새 exact marker를 추가한다.
 
 ```text
 ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1
+ACTION_LOCK_ON_REVIEW_FIXES_READY empty_action_add=1 empty_lock_add=1 detailed_errors=1 observer_commit=1
 ```
 
 - schema v2 round-trip과 v1 migration은 Infrastructure 테스트가 증명하며 Editor가 serializer를 참조하지 않는다.

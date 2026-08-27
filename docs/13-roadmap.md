@@ -97,6 +97,10 @@ selection, playback time, preview와 history stack은 저장되는 `SceneDocumen
 - [x] document/history 전환 뒤 세 track full-frame selection reconciliation과 playback lock/no-op/stale preimage 불변
 - [x] Godot 독립 step marker/segment layout, Action/Lock-on surface viewport hit와 enabled/target/mode label
 - [x] Action/Lock-on toolbar, active semantic Inspector, target/mode/offset 입력과 exact Main wiring/역순 idempotent cleanup
+- [x] marker가 없는 Action/Lock-on lane 배경 클릭으로 문서·history·playback mutation 없이 첫 Add Inspector를 여는 진입 경로
+- [x] no-op·duplicate·stale·range·target/mode를 구분하는 typed semantic outcome과 mutation-after-observer 전용 한글 안내
+- [x] 두 번 연속 playback 리디렉션과 rollback 뒤 이동 frame selection 보존 상태에서도 누락·중복 target payload나 잘못된 `Applied`를 만들지 않는 bounded marker 선택 안정화·원자적 rollback
+- [x] 정의되지 않은 `LockOnTrackingMode` Domain 거부와 기존 `lock-on` 결정적 ID 규약 유지
 - [x] 동일 `SceneSnapshot`의 stepped state를 사용하는 TopView action/lock line/target marker와 WorldView `ActionLabel`/`LockBadge`/재사용 `LockLine`
 - [x] 실제 Button/SpinBox/LineEdit/OptionButton/surface signal, hand-derived revision/history/apply count, selection, left-hold, playback lock, cross-time·same-time Action↔Lock-on Inspector 전환과 두 overlay를 검증하는 exact runtime marker
 

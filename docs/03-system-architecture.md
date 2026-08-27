@@ -101,9 +101,13 @@ Add command는 생성할 keyframe 자체를 postimage로 보관한다. Execute�
 ```text
 Action/Lock-on marker click
 → DocumentSession.SelectActionKeyframe / SelectLockOnKeyframe
-→ pause + marker time seek
+→ bounded pause + marker time seek 안정화
 → active track과 해당 비영구 selection 변경
 → lane/Inspector 가용성과 두 view snapshot 동기화
+
+Action/Lock-on lane background click
+→ DocumentSession.ActivateSemanticTrack
+→ 문서/history/playback 불변으로 target Inspector 표시
 
 Add/Apply/Delete
 → track별 immutable full-frame command
@@ -113,13 +117,13 @@ Add/Apply/Delete
 → 같은 SceneSnapshot의 stepped state를 TopView/WorldView에 전달
 ```
 
-Action은 ID/time/원문 `ActionKey`, Lock-on은 ID/time/enabled/target/yaw offset/tracking mode 전체가 command preimage/postimage다. Add는 `{actorId}-action-{D4}` 또는 `{actorId}-lock-on-{D4}`에서 사용하지 않은 가장 작은 ordinal ID를 만든다. Update는 ID를 유지하고 모든 의미 필드를 원자적으로 교체한다. Delete는 Action/Lock-on track을 비우는 것도 허용한다. stale preimage, 같은 track의 동일 시각, 문서 범위 밖 time, 활성인데 target이 없는 Lock-on과 self/unknown target은 mutation 전에 거부된다.
+Action은 ID/time/원문 `ActionKey`, Lock-on은 ID/time/enabled/target/yaw offset/tracking mode 전체가 command preimage/postimage다. Add는 `{actorId}-action-{D4}` 또는 `{actorId}-lock-on-{D4}`에서 사용하지 않은 가장 작은 ordinal ID를 만든다. Update는 ID를 유지하고 모든 의미 필드를 원자적으로 교체한다. Delete는 Action/Lock-on track을 비우는 것도 허용한다. stale preimage, 같은 track의 동일 시각, 문서 범위 밖 time, 활성인데 target이 없는 Lock-on과 self/unknown target, 미정의 tracking mode는 mutation 전에 거부된다. Application은 호환용 `SceneEditResult` API와 함께 `SemanticEditOutcome`의 typed issue를 제공해 `NoChange`, duplicate time, stale preimage, range, target/yaw/mode validation과 일반 conflict를 문자열 파싱 없이 구분한다.
 
 세 track은 하나의 `DocumentSession` history를 공유한다. `InspectorPanel/HistoryToolbar`는 세 Inspector section 밖에 있어 active track과 무관하게 항상 보인다. `TransformInspectorController`가 signal 수명주기를 소유하지만 handler와 Disabled 계산은 Transform 편집 가능성이 아니라 `CanEditHistory`와 `CanUndo`/`CanRedo`만 사용한다. 따라서 Action/Lock-on marker를 활성 상태로 유지한 채 global 버튼으로 마지막 semantic command를 직접 왕복한다.
 
 `SceneDocument` revision은 성공한 영구 Add/Update/Delete와 Undo/Redo에만 증가한다. marker 선택, playback seek/pause, disabled 버튼 클릭과 preview clear는 문서를 바꾸지 않는다. `HistoryChanged`는 성공한 stack 이동 뒤에만 일어난다. global Undo/Redo는 선택 actor가 없는 경우와 재생 중에 잠기며, 정지 상태에서는 active track이나 exact Transform marker와 무관하게 stack을 왕복한다.
 
-Action/Lock-on marker 선택은 target `ActiveTimelineTrack`을 pause/seek보다 먼저 확정한다. 따라서 seek가 만드는 selection/availability event observer도 target track과 full-frame payload를 같은 상태로 읽는다. 두 track marker가 같은 시각이라 seek event가 생기지 않아도 cross-track 전환은 target selection event를 정확히 한 번 게시해 Inspector visibility를 갱신한다.
+Action/Lock-on marker 선택은 target `ActiveTimelineTrack`을 pause/seek보다 먼저 확정한다. target actor/frame의 최신 full value, paused 상태, target time, active track, selected ID/full payload가 모두 일치할 때까지 최대 32회 안정화하고 그 뒤에만 `Applied`를 반환한다. 첫 target seek를 observer가 2초로, 두 번째 target seek를 3초로 유한 재지정해도 세 번째 target 시도에서 실제 target time과 payload가 맞아야 성공한다. 따라서 두 번째 redirect 뒤 다른 time인데도 `Applied`를 반환하지 않는다. 각 attempt는 시작 시 해당 track의 publication sequence와 active context를 캡처하고, 이후 실제로 게시된 마지막 selection 서명의 actor/active track/ID/immutable full frame이 최신 target과 모두 같은지 확인한다. `Seek`가 state를 바꿨다는 사실 자체는 payload 게시 증거로 사용하지 않는다. 앞 redirect의 강제 갱신 상태를 final attempt로 넘기지 않아 최종 안정 target full payload는 정확히 한 번 게시된다. 두 track marker가 같은 시각이라 seek event가 생기지 않거나 rollback이 다른 시각으로 옮겨진 ID/full frame을 보존해 seek event에서 selection change가 생기지 않아도 cross-track 전환은 target selection event를 정확히 한 번 강제 게시한다. final target event observer가 active track을 다시 바꾸면 target context를 복원한 payload를 한 번 더 게시한 뒤 안정성을 확인한다. 안정화 중 target이 사라지거나 actor가 달라지면 아래 rollback 계약을 사용하며, 선택 API 재진입은 `Conflict`로 막아 stack 재귀를 만들지 않는다.
 
 semantic marker 선택을 시작할 때 actor, 호출 시점 playback time/playing, active track과 세 track의 selected ID를 rollback snapshot으로 잡는다. pause/seek observer가 target frame을 제거해 `Conflict`가 되면 호출 시각과 playing 상태를 frame 이동과 무관하게 그대로 복구하고, 이전 actor가 여전히 선택된 경우 세 ID를 각각 최신 document에서 다시 읽는다. 캡처 ID가 남아 있으면 frame이 다른 시각으로 이동했어도 최신 immutable full frame을 선택·게시하며 availability는 복구된 time/playing과 최신 document에서 다시 계산한다. observer가 actor selection을 해제하거나 바꿨다면 snapshot actor를 되살리지 않고 null/현재 actor를 유지하며, 현재 actor가 다르면 호출 시각의 exact selection으로 재조정한다.
 
@@ -130,6 +134,8 @@ rollback 중 playback에서 생긴 임시 selection event는 외부에 내보내
 ### 편집 가능성 경계
 
 `DocumentSession`이 actor/track selection, current time과 playback state를 함께 검사한다. actor가 없거나 playback 중이면 세 track CRUD가 모두 잠긴다. 정지 상태의 Add는 해당 track의 현재 시각에 marker가 없을 때만 가능하고, Update/Delete는 해당 track marker selection이 있어야 한다. Update는 selection time과 재생 헤드가 같아야 한다. Transform Delete만 actor마다 최소 한 marker를 남겨야 하며 Action/Lock-on은 마지막 marker도 지울 수 있다. 이 정책은 Presentation의 `Disabled` 표시에만 의존하지 않는다. 남아 있던 Godot signal도 세션 API에서 다시 거부하므로 revision, history와 두 projection apply count가 불변이다.
+
+빈 Action/Lock-on lane의 background pointer는 marker 선택과 별도로 semantic track만 활성화한다. 이 경로는 재생 시각·playing 상태, 세 selection, revision과 shared history를 바꾸지 않으며 target track의 현재 full selection payload를 강제 게시해 빈 track Inspector도 즉시 보이게 한다. 두 semantic controller는 operation 전후 `CurrentRevision`을 비교한다. 호출이 예외를 던져도 revision이 증가했다면 history/reconciliation까지 완료된 mutation으로 보고 `변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다: ...`를 표시한다. revision이 그대로인 예기치 않은 예외는 catch하지 않고 원래 stack과 함께 전파한다. 예상 가능한 validation·conflict·no-op만 typed outcome을 통해 UI 문구가 된다.
 
 ### 재생
 

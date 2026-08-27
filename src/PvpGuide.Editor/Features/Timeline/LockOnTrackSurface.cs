@@ -119,6 +119,10 @@ public partial class LockOnTrackSurface : Control
         {
             _session.SelectLockOnKeyframe(keyframeId);
         }
+        else
+        {
+            _session.ActivateSemanticTrack(TimelineTrackKind.LockOn);
+        }
 
         AcceptEvent();
     }

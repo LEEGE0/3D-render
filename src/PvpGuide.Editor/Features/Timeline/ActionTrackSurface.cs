@@ -117,6 +117,10 @@ public partial class ActionTrackSurface : Control
         {
             _session.SelectActionKeyframe(keyframeId);
         }
+        else
+        {
+            _session.ActivateSemanticTrack(TimelineTrackKind.Action);
+        }
 
         AcceptEvent();
     }

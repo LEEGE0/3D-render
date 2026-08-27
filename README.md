@@ -76,11 +76,11 @@ Godot 메인 장면을 실행하면 왼쪽 위 탑뷰, 오른쪽 위 3D 뷰, 아
 
 ### Action/Lock-on 트랙 CRUD 사용법
 
-타임라인에는 Transform lane 아래에 Action lane과 Lock-on lane이 있다. 세 lane은 같은 선택 배우와 `PlaybackClock`을 사용하지만 marker ID, 동일 시각 충돌과 Inspector selection은 트랙별로 독립적이다. Action/Lock-on 상태는 보간하지 않고 해당 시각 이하에서 가장 가까운 왼쪽 marker 값을 다음 marker 또는 문서 끝까지 유지한다. 첫 marker 이전에는 Action이 없고 Lock-on은 꺼진 상태다.
+타임라인에는 Transform lane 아래에 Action lane과 Lock-on lane이 있다. 세 lane은 같은 선택 배우와 `PlaybackClock`을 사용하지만 marker ID, 동일 시각 충돌과 Inspector selection은 트랙별로 독립적이다. Action/Lock-on lane의 marker가 없는 배경을 클릭하면 문서·history·재생 시각을 바꾸지 않고 해당 트랙을 활성화해 Inspector를 연다. 따라서 빈 트랙도 Inspector 입력을 채운 뒤 첫 marker를 추가할 수 있다. Action/Lock-on 상태는 보간하지 않고 해당 시각 이하에서 가장 가까운 왼쪽 marker 값을 다음 marker 또는 문서 끝까지 유지한다. 첫 marker 이전에는 Action이 없고 Lock-on은 꺼진 상태다.
 
-1. 탑뷰에서 배우를 선택하고 slider로 정지 시각을 정한다. Action의 `ActionKey`에 의미 키를 입력한 뒤 `Action 추가`를 누르면 `{actorId}-action-{D4}` ID의 marker가 생긴다. Action marker를 클릭하면 재생 헤드가 그 시각으로 이동하고 Action Inspector가 선택 ID/time/key를 표시한다.
+1. 탑뷰에서 배우를 선택하고 slider로 정지 시각을 정한 뒤 Action lane의 빈 배경을 눌러 Action Inspector를 연다. `ActionKey`에 의미 키를 입력하고 `Action 추가`를 누르면 `{actorId}-action-{D4}` ID의 marker가 생긴다. Action marker를 클릭하면 재생 헤드가 그 시각으로 이동하고 Action Inspector가 선택 ID/time/key를 표시한다.
 2. Action marker를 선택한 뒤 `시각`과 `ActionKey`를 바꾸고 `Action 적용` 또는 ActionKey/Time 입력의 Enter를 제출한다. time과 key는 하나의 command로 함께 바뀐다. 공백 key, 문서 범위 밖 time, 같은 Action track의 동일 시각, stale preimage와 의미상 같은 Apply는 문서/history를 변경하지 않고 Action 오류 label에 이유를 남긴다. `선택 Action 삭제`는 선택 marker 하나를 제거하며 Action track은 비어 있어도 된다.
-3. Lock-on을 추가하려면 `Lock-on 활성` 여부, self를 제외한 target actor ID, mode와 Yaw offset을 고른 뒤 `Lock-on 추가`를 누른다. 활성 Lock-on에는 대상이 반드시 필요하다. mode는 `Snap`, `Continuous`, `Keyframe only`를 지원하며 저장 값은 각각 `snap`, `continuous`, `keyframe_only`다. offset은 유한한 각도만 받고 `[-180, 180)`으로 정규화한다.
+3. Lock-on을 처음 추가할 때는 Lock-on lane의 빈 배경을 눌러 Inspector를 연다. `Lock-on 활성` 여부, self를 제외한 target actor ID, mode와 Yaw offset을 고른 뒤 `Lock-on 추가`를 누른다. 활성 Lock-on에는 대상이 반드시 필요하다. mode는 `Snap`, `Continuous`, `Keyframe only`를 지원하며 저장 값은 각각 `snap`, `continuous`, `keyframe_only`다. offset은 유한한 각도만 받고 `[-180, 180)`으로 정규화한다.
 4. Lock-on marker를 클릭하면 Lock-on Inspector가 ID/time/enabled/target/mode/offset을 committed 값으로 다시 읽는다. 값을 바꾸고 `Lock-on 적용` 또는 Time/offset 입력의 Enter를 제출하면 모든 필드가 하나의 command로 확정된다. `선택 Lock-on 삭제`는 마지막 marker도 삭제할 수 있으며, 삭제 후 첫 marker 이전/빈 track 평가는 Lock-on OFF다.
 5. Action/Lock-on Add·Update·Delete는 Transform과 같은 단일 session history를 사용한다. `InspectorPanel/HistoryToolbar`의 `실행 취소`/`다시 실행`은 Transform/Action/Lock-on section 전환과 무관하게 항상 보인다. 선택 actor가 있고 정지 상태라면 active track이나 Transform exact marker 유무와 관계없이 `CanEditHistory`와 실제 Undo/Redo stack으로 활성화되므로, Action/Lock-on marker를 유지한 채 semantic command를 바로 왕복할 수 있다.
 6. 재생 중에는 두 semantic Add/Delete, Inspector Apply/Enter와 공유 Undo/Redo가 모두 잠긴다. 남아 있던 signal이 들어와도 `DocumentSession`이 다시 검사하므로 revision, history와 두 projection apply count는 바뀌지 않는다. 정지하면 해당 actor/time/selection 기준으로 가용성을 다시 계산한다.
@@ -101,13 +101,17 @@ UI는 잠긴 조작을 성공처럼 보이게 하거나 값을 자동 clamp해 �
 | 현재 시각에 이미 marker가 있음 | Add는 `현재 시각에는 이미 변환 키프레임이 있습니다`로 잠긴다. |
 | 마지막 변환 marker | Delete는 `마지막 변환 키프레임은 삭제할 수 없습니다`로 잠긴다. |
 | Apply time이 0~문서 길이 밖, X/Z가 ±1000 밖, Y가 ±100 밖, 또는 유한하지 않음 | commit/preview를 시작하지 않거나 활성 preview를 취소하고 `시각은 0~…초 범위 안이어야 합니다`, `X/Z는 ±1000, Y는 ±100 범위 안이어야 합니다`, 또는 `시각, 좌표와 방향각은 유한한 숫자여야 합니다`를 ErrorLabel에 남긴다. |
-| 동일 시각 충돌 또는 stale preimage | Apply는 `선택한 키프레임의 변경이 오래되었거나 같은 시각의 키프레임과 충돌했습니다.`를, timeline Add/Delete는 `키프레임 추가 실패:`/`키프레임 삭제 실패:` 뒤에 최신 lock 이유 또는 `선택한 키프레임 변경이 최신 문서 상태와 충돌했습니다.`를 표시한다. |
+| Transform 동일 시각 충돌 또는 stale preimage | `선택한 키프레임의 변경이 오래되었거나 같은 시각의 키프레임과 충돌했습니다.`를 표시한다. |
 | 의미 값이 같은 Apply | `적용할 실제 변환 변경이 없습니다.`를 표시하고 revision/history를 만들지 않는다. |
-| ActionKey가 공백 | `ActionKey는 공백일 수 없습니다.`를 표시하고 Action command를 만들지 않는다. |
-| 활성 Lock-on target이 없음/self/문서에 없음 | UI는 `활성 Lock-on에는 대상 배우가 필요합니다.`를 표시하고, Domain은 다른 actor의 안정 ID가 아닌 target을 거부한다. |
-| Action/Lock-on 동일 시각·stale·no-op | track별 충돌/오래된 변경 또는 `적용할 실제 ... 변경이 없습니다.`를 표시하고 revision/history를 보존한다. |
+| ActionKey가 공백 | `<작업> 실패: ActionKey는 공백일 수 없습니다.`를 표시하고 Action command를 만들지 않는다. |
+| Action/Lock-on 같은 트랙의 동일 시각 | `<작업> 실패: 해당 시각에는 이미 Action/Lock-on 키프레임이 있습니다.`를 표시한다. |
+| Action/Lock-on stale preimage | `<작업> 실패: 선택 정보가 오래되어 최신 문서와 충돌했습니다.`를 표시한다. |
+| Action/Lock-on time이 문서 범위 밖 | `<작업> 실패: 시각은 0초 이상 <문서 길이>초 이하여야 합니다.`를 표시한다. |
+| 활성 Lock-on target이 없음/self/문서에 없음 | `<작업> 실패: Lock-on 대상은 같은 문서의 다른 배우여야 하며 활성 상태에는 대상이 필요합니다.`를 표시하고 Domain도 같은 제약을 강제한다. |
+| Action/Lock-on 의미 값이 같은 Apply | `<작업>: 적용할 실제 Action/Lock-on 변경이 없습니다.`를 표시하고 revision/history를 보존한다. |
+| 문서는 바뀌었지만 Changed observer가 실패 | `<작업>: 변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다: ...`를 표시한다. revision이 증가하지 않은 예기치 않은 예외나 프로그래밍 오류는 UI 실패 문구로 바꾸지 않고 원래 예외 그대로 전파한다. |
 
-stale preimage란 조작을 시작할 때 잡은 ID·time·position·정규화된 Yaw가 다른 변경으로 이미 달라진 경우다. 이 경우 command는 부분 변경 없이 `Conflict`가 되며 외부의 최신 committed 값은 보존된다.
+stale preimage란 조작을 시작할 때 잡은 immutable full keyframe이 다른 변경으로 이미 달라진 경우다. Transform은 ID·time·position·정규화된 Yaw를, Action은 ID·time·ActionKey를, Lock-on은 ID·time·enabled·target·offset·mode를 모두 비교한다. 이 경우 command는 부분 변경 없이 `Conflict`가 되며 외부의 최신 committed 값은 보존된다.
 
 Transform/Action/Lock-on keyframe Add/Update/Delete, marker 선택, 단계 상태와 교육 overlay까지 제공한다. 실제 DSR 애니메이션 재생, Lock-on 방향 계산, Lock-on과 자유 방향 이동 궤적, 영상 렌더 실행과 게임패드 조작은 아직 제공하지 않는다. 다음 구현 단위는 Lock-on 방향 계산과 이동 궤적이다.
 
@@ -155,11 +159,12 @@ CRUD 통합 검사는 marker click, Add, time/pose Apply, Delete와 실제 Undo/
 TIMELINE_KEYFRAME_CRUD_READY add=1 update=1 time_move=1 delete=1 undo=1 redo=1 duplicate_reject=1 range_reject=1 min_keyframe_guard=1 stale_conflict=1 selection_sync=1 preview_cancel=1 playback_lock=1
 ```
 
-마지막 Action/Lock-on probe는 기존 transform probe의 최종 actor 상태를 보존하고 target actor 하나를 추가한다. 실제 Action/Lock-on Add/Delete/Apply 버튼, SpinBox `ValueChanged`, LineEdit `TextSubmitted`, OptionButton `ItemSelected`, 두 semantic track과 slider의 viewport mouse input, 항상 보이는 global Undo/Redo 버튼을 사용한다. Action/Lock 활성 상태를 유지한 Undo/Redo, 각 mutation의 hand-derived revision/history, marker ID/time, TopView/WorldView apply count, 0.75초 left-hold snapshot, TopView가 실제 소비한 `DisplayedSemanticOverlays`와 WorldView overlay node의 text/visibility를 검증한다. 이어 paused에서 각 조작이 가능함을 먼저 확인하고 재생 중 Action/Lock Add·Apply·Delete와 global Undo/Redo 실제 signal이 모두 no-op인지 별도 exact marker로 증명한다. 마지막에는 실제 surface mouse signal로 0.75초 Action → 0.2초 Lock-on → 0.75초 Action marker를 왕복해 cross-time active track, selection/time과 Inspector visibility를 확인한다. 이어 slider로 0.2초를 선택하고 실제 Action Add signal로 Lock-on과 같은 시각 marker를 만든 뒤 Lock-on → Action surface를 왕복해 seek 없이도 target Inspector만 표시되는지 확인한다. 최종 hand-derived 상태는 revision/history `29/13`, Top/World apply count `57/57`이다. schema migration은 Editor가 Infrastructure를 참조하지 않도록 이 marker에 포함하지 않는다.
+마지막 Action/Lock-on probe는 기존 transform probe의 최종 actor 상태를 보존하고 target actor 하나를 추가한다. 빈 Action/Lock-on lane의 실제 viewport 배경을 먼저 클릭해 각 Inspector와 첫 Add 입력을 표시한 다음 실제 Add/Delete/Apply 버튼, SpinBox `ValueChanged`, LineEdit `TextSubmitted`, OptionButton `ItemSelected`, slider, 항상 보이는 global Undo/Redo 버튼을 사용한다. Action/Lock 활성 상태를 유지한 Undo/Redo, 각 mutation의 hand-derived revision/history, marker ID/time, TopView/WorldView apply count, 0.75초 left-hold snapshot, TopView가 실제 소비한 `DisplayedSemanticOverlays`와 WorldView overlay node의 text/visibility를 검증한다. duplicate/range/target/no-op의 서로 다른 문구와 Action Add·Lock Apply의 mutation-after-observer 저장 안내도 실제 signal로 확인하며, 뒤의 정상 Lock Apply가 ErrorLabel을 지우는지도 검사한다. 이어 재생 중 Action/Lock Add·Apply·Delete와 global Undo/Redo 실제 signal이 모두 no-op인지 별도 exact marker로 증명한다. 마지막에는 실제 surface mouse signal로 cross-time과 same-time Action↔Lock-on Inspector 전환을 확인한다. 최종 hand-derived 상태는 revision/history `30/14`, Top/World apply count `58/58`이다. schema migration은 Editor가 Infrastructure를 참조하지 않도록 이 marker에 포함하지 않는다.
 
 ```text
 ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1
 ACTION_LOCK_ON_PLAYBACK_GUARDS_READY action_add=1 action_apply=1 action_delete=1 lock_add=1 lock_apply=1 lock_delete=1 undo=1 redo=1
+ACTION_LOCK_ON_REVIEW_FIXES_READY empty_action_add=1 empty_lock_add=1 detailed_errors=1 observer_commit=1
 ```
 
 ## 기준 좌표와 뒤잡 규칙

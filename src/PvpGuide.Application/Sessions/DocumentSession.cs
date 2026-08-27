@@ -33,6 +33,11 @@ public sealed class DocumentSession
     private readonly Queue<SemanticRollbackWorkItem> _semanticRollbackWorkItems = [];
     private bool _isRestoringSemanticSelection;
     private bool _isDispatchingSemanticRollbackWork;
+    private bool _isSelectingSemanticKeyframe;
+    private long _actionSelectionPublicationSequence;
+    private long _lockOnSelectionPublicationSequence;
+    private ActionSelectionPublication? _lastActionSelectionPublication;
+    private LockOnSelectionPublication? _lastLockOnSelectionPublication;
 
     public DocumentSession(SceneDocument document)
     {
@@ -200,6 +205,40 @@ public sealed class DocumentSession
     public IReadOnlyList<LockOnKeyframe> GetSelectedActorLockOnKeyframes() =>
         GetSelectedActor()?.LockOnKeyframes.ToArray() ?? [];
 
+    public SceneEditResult ActivateSemanticTrack(TimelineTrackKind track)
+    {
+        if (track is not TimelineTrackKind.Action and not TimelineTrackKind.LockOn)
+        {
+            throw new ArgumentOutOfRangeException(nameof(track), "Only Action and Lock-on tracks can be activated here.");
+        }
+
+        if (_isRestoringSemanticSelection || SelectedActorId is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        if (ActiveTimelineTrack == track)
+        {
+            return SceneEditResult.NoChange;
+        }
+
+        ActiveTimelineTrack = track;
+        if (track == TimelineTrackKind.Action)
+        {
+            RaiseActionKeyframeSelectionChanged(SetSelectedActionKeyframe(
+                GetSelectedActionKeyframe(),
+                forceNotification: true));
+        }
+        else
+        {
+            RaiseLockOnKeyframeSelectionChanged(SetSelectedLockOnKeyframe(
+                GetSelectedLockOnKeyframe(),
+                forceNotification: true));
+        }
+
+        return SceneEditResult.Applied;
+    }
+
     public SceneEditResult SelectTransformKeyframe(string keyframeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
@@ -228,7 +267,7 @@ public sealed class DocumentSession
     public SceneEditResult SelectActionKeyframe(string keyframeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
-        if (_isRestoringSemanticSelection)
+        if (_isRestoringSemanticSelection || _isSelectingSemanticKeyframe)
         {
             return SceneEditResult.Conflict;
         }
@@ -241,49 +280,82 @@ public sealed class DocumentSession
         }
 
         var rollbackState = CaptureSemanticSelectionRollbackState();
-        var forceTrackRefresh = rollbackState.ActiveTrack != TimelineTrackKind.Action &&
-            SelectedActionKeyframeId == keyframeId &&
-            SameAction(_selectedActionKeyframe, keyframe);
-        ActiveTimelineTrack = TimelineTrackKind.Action;
-        ClearPreview();
-        Playback.Pause();
-        keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
-        if (keyframe is null)
+        var activeTrackBeforeAttempt = ActiveTimelineTrack;
+        var publicationSequenceBeforeAttempt = _actionSelectionPublicationSequence;
+        _isSelectingSemanticKeyframe = true;
+        try
         {
-            return RestoreSemanticSelectionAfterConflict(rollbackState);
-        }
-
-        Playback.Seek(keyframe.TimeSeconds);
-        keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
-        if (keyframe is null)
-        {
-            return RestoreSemanticSelectionAfterConflict(rollbackState);
-        }
-
-        if (Math.Abs(Playback.CurrentTimeSeconds - keyframe.TimeSeconds) > EditTimeToleranceSeconds)
-        {
-            Playback.Seek(keyframe.TimeSeconds);
-            keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
-            if (keyframe is null)
+            ActiveTimelineTrack = TimelineTrackKind.Action;
+            ClearPreview();
+            for (var attempt = 0; attempt < MaxReconciliationAttempts; attempt++)
             {
-                return RestoreSemanticSelectionAfterConflict(rollbackState);
-            }
-        }
+                if (attempt > 0)
+                {
+                    activeTrackBeforeAttempt = ActiveTimelineTrack;
+                    publicationSequenceBeforeAttempt = _actionSelectionPublicationSequence;
+                    ActiveTimelineTrack = TimelineTrackKind.Action;
+                }
 
-        forceTrackRefresh |= ActiveTimelineTrack != TimelineTrackKind.Action;
-        ActiveTimelineTrack = TimelineTrackKind.Action;
-        var selectionChange = SetSelectedActionKeyframe(keyframe, forceTrackRefresh);
-        var availabilityChanges = RefreshAllEditAvailabilityState();
-        RaiseActionKeyframeSelectionChanged(selectionChange);
-        RaiseEditAvailabilityChanged(availabilityChanges.Transform);
-        RaiseTimelineEditAvailabilityChanged(availabilityChanges.Timeline);
-        return SceneEditResult.Applied;
+                Playback.Pause();
+                keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
+                if (keyframe is null)
+                {
+                    return RestoreSemanticSelectionAfterConflict(rollbackState);
+                }
+
+                Playback.Seek(keyframe.TimeSeconds);
+                keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
+                if (keyframe is null)
+                {
+                    return RestoreSemanticSelectionAfterConflict(rollbackState);
+                }
+
+                if (Playback.IsPlaying || !IsAtTime(Playback.CurrentTimeSeconds, keyframe.TimeSeconds))
+                {
+                    continue;
+                }
+
+                var targetPayloadPublishedThisAttempt = WasActionTargetPublishedSince(
+                    publicationSequenceBeforeAttempt,
+                    actorId,
+                    keyframe);
+                var forceTrackRefresh = ActiveTimelineTrack != TimelineTrackKind.Action ||
+                    (!targetPayloadPublishedThisAttempt &&
+                     activeTrackBeforeAttempt != TimelineTrackKind.Action &&
+                     SelectedActionKeyframeId == keyframeId &&
+                     SameAction(_selectedActionKeyframe, keyframe));
+                ActiveTimelineTrack = TimelineTrackKind.Action;
+                var selectionChange = SetSelectedActionKeyframe(keyframe, forceTrackRefresh);
+                var availabilityChanges = RefreshAllEditAvailabilityState();
+                RaiseActionKeyframeSelectionChanged(selectionChange);
+                RaiseEditAvailabilityChanged(availabilityChanges.Transform);
+                RaiseTimelineEditAvailabilityChanged(availabilityChanges.Timeline);
+
+                var current = GetCurrentActionKeyframe(actorId, keyframeId);
+                if (current is not null &&
+                    !Playback.IsPlaying &&
+                    IsAtTime(Playback.CurrentTimeSeconds, current.TimeSeconds) &&
+                    ActiveTimelineTrack == TimelineTrackKind.Action &&
+                    SelectedActionKeyframeId == keyframeId &&
+                    SameAction(_selectedActionKeyframe, current))
+                {
+                    return SceneEditResult.Applied;
+                }
+
+            }
+
+            return RestoreSemanticSelectionAfterConflict(rollbackState);
+        }
+        finally
+        {
+            _isSelectingSemanticKeyframe = false;
+        }
     }
 
     public SceneEditResult SelectLockOnKeyframe(string keyframeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
-        if (_isRestoringSemanticSelection)
+        if (_isRestoringSemanticSelection || _isSelectingSemanticKeyframe)
         {
             return SceneEditResult.Conflict;
         }
@@ -296,43 +368,76 @@ public sealed class DocumentSession
         }
 
         var rollbackState = CaptureSemanticSelectionRollbackState();
-        var forceTrackRefresh = rollbackState.ActiveTrack != TimelineTrackKind.LockOn &&
-            SelectedLockOnKeyframeId == keyframeId &&
-            SameLockOn(_selectedLockOnKeyframe, keyframe);
-        ActiveTimelineTrack = TimelineTrackKind.LockOn;
-        ClearPreview();
-        Playback.Pause();
-        keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
-        if (keyframe is null)
+        var activeTrackBeforeAttempt = ActiveTimelineTrack;
+        var publicationSequenceBeforeAttempt = _lockOnSelectionPublicationSequence;
+        _isSelectingSemanticKeyframe = true;
+        try
         {
-            return RestoreSemanticSelectionAfterConflict(rollbackState);
-        }
-
-        Playback.Seek(keyframe.TimeSeconds);
-        keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
-        if (keyframe is null)
-        {
-            return RestoreSemanticSelectionAfterConflict(rollbackState);
-        }
-
-        if (Math.Abs(Playback.CurrentTimeSeconds - keyframe.TimeSeconds) > EditTimeToleranceSeconds)
-        {
-            Playback.Seek(keyframe.TimeSeconds);
-            keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
-            if (keyframe is null)
+            ActiveTimelineTrack = TimelineTrackKind.LockOn;
+            ClearPreview();
+            for (var attempt = 0; attempt < MaxReconciliationAttempts; attempt++)
             {
-                return RestoreSemanticSelectionAfterConflict(rollbackState);
-            }
-        }
+                if (attempt > 0)
+                {
+                    activeTrackBeforeAttempt = ActiveTimelineTrack;
+                    publicationSequenceBeforeAttempt = _lockOnSelectionPublicationSequence;
+                    ActiveTimelineTrack = TimelineTrackKind.LockOn;
+                }
 
-        forceTrackRefresh |= ActiveTimelineTrack != TimelineTrackKind.LockOn;
-        ActiveTimelineTrack = TimelineTrackKind.LockOn;
-        var selectionChange = SetSelectedLockOnKeyframe(keyframe, forceTrackRefresh);
-        var availabilityChanges = RefreshAllEditAvailabilityState();
-        RaiseLockOnKeyframeSelectionChanged(selectionChange);
-        RaiseEditAvailabilityChanged(availabilityChanges.Transform);
-        RaiseTimelineEditAvailabilityChanged(availabilityChanges.Timeline);
-        return SceneEditResult.Applied;
+                Playback.Pause();
+                keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
+                if (keyframe is null)
+                {
+                    return RestoreSemanticSelectionAfterConflict(rollbackState);
+                }
+
+                Playback.Seek(keyframe.TimeSeconds);
+                keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
+                if (keyframe is null)
+                {
+                    return RestoreSemanticSelectionAfterConflict(rollbackState);
+                }
+
+                if (Playback.IsPlaying || !IsAtTime(Playback.CurrentTimeSeconds, keyframe.TimeSeconds))
+                {
+                    continue;
+                }
+
+                var targetPayloadPublishedThisAttempt = WasLockOnTargetPublishedSince(
+                    publicationSequenceBeforeAttempt,
+                    actorId,
+                    keyframe);
+                var forceTrackRefresh = ActiveTimelineTrack != TimelineTrackKind.LockOn ||
+                    (!targetPayloadPublishedThisAttempt &&
+                     activeTrackBeforeAttempt != TimelineTrackKind.LockOn &&
+                     SelectedLockOnKeyframeId == keyframeId &&
+                     SameLockOn(_selectedLockOnKeyframe, keyframe));
+                ActiveTimelineTrack = TimelineTrackKind.LockOn;
+                var selectionChange = SetSelectedLockOnKeyframe(keyframe, forceTrackRefresh);
+                var availabilityChanges = RefreshAllEditAvailabilityState();
+                RaiseLockOnKeyframeSelectionChanged(selectionChange);
+                RaiseEditAvailabilityChanged(availabilityChanges.Transform);
+                RaiseTimelineEditAvailabilityChanged(availabilityChanges.Timeline);
+
+                var current = GetCurrentLockOnKeyframe(actorId, keyframeId);
+                if (current is not null &&
+                    !Playback.IsPlaying &&
+                    IsAtTime(Playback.CurrentTimeSeconds, current.TimeSeconds) &&
+                    ActiveTimelineTrack == TimelineTrackKind.LockOn &&
+                    SelectedLockOnKeyframeId == keyframeId &&
+                    SameLockOn(_selectedLockOnKeyframe, current))
+                {
+                    return SceneEditResult.Applied;
+                }
+
+            }
+
+            return RestoreSemanticSelectionAfterConflict(rollbackState);
+        }
+        finally
+        {
+            _isSelectingSemanticKeyframe = false;
+        }
     }
 
     public SceneEditResult AddTransformKeyframeAtCurrentTime()
@@ -416,73 +521,138 @@ public sealed class DocumentSession
         return SceneEditResult.Applied;
     }
 
-    public SceneEditResult AddActionKeyframeAtCurrentTime(string actionKey)
+    public SceneEditResult AddActionKeyframeAtCurrentTime(string actionKey) =>
+        AddActionKeyframeAtCurrentTimeDetailed(actionKey).Result;
+
+    public SemanticEditOutcome AddActionKeyframeAtCurrentTimeDetailed(string actionKey)
     {
-        if (!ActionEditAvailability.CanAdd || SelectedActorId is null)
+        if (string.IsNullOrWhiteSpace(actionKey))
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.InvalidActionKey);
         }
 
         var actor = GetSelectedActor();
-        if (actor is null)
+        if (actor is null || SelectedActorId is null)
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.ActorSelectionRequired);
         }
 
-        ActionKeyframe keyframe;
-        try
+        if (Playback.IsPlaying)
         {
-            keyframe = new ActionKeyframe(
-                GetNextActionKeyframeId(actor),
-                Playback.CurrentTimeSeconds,
-                actionKey);
-        }
-        catch (ArgumentException)
-        {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.PlaybackActive);
         }
 
+        if (actor.ActionKeyframes.Any(frame => IsAtTime(frame.TimeSeconds, Playback.CurrentTimeSeconds)))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.DuplicateTime);
+        }
+
+        var keyframe = new ActionKeyframe(
+            GetNextActionKeyframeId(actor),
+            Playback.CurrentTimeSeconds,
+            actionKey);
         ClearPreview();
-        return ExecuteCommandOnTrack(
+        return ExecuteSemanticCommandOnTrack(
             TimelineTrackKind.Action,
             new AddActionKeyframeCommand(SelectedActorId, keyframe));
     }
 
-    public SceneEditResult UpdateSelectedActionKeyframe(double timeSeconds, string actionKey)
+    public SceneEditResult UpdateSelectedActionKeyframe(double timeSeconds, string actionKey) =>
+        UpdateSelectedActionKeyframeDetailed(timeSeconds, actionKey).Result;
+
+    public SemanticEditOutcome UpdateSelectedActionKeyframeDetailed(double timeSeconds, string actionKey)
     {
-        if (!ActionEditAvailability.CanUpdate || SelectedActorId is null || _selectedActionKeyframe is null ||
-            !double.IsFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > _document.DurationSeconds)
+        if (!IsTimeWithinDocument(timeSeconds))
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.TimeOutOfRange);
+        }
+
+        if (string.IsNullOrWhiteSpace(actionKey))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.InvalidActionKey);
+        }
+
+        var actor = GetSelectedActor();
+        if (actor is null || SelectedActorId is null)
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.ActorSelectionRequired);
+        }
+
+        if (Playback.IsPlaying)
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.PlaybackActive);
         }
 
         var before = _selectedActionKeyframe;
-        ActionKeyframe after;
-        try
+        if (before is null)
         {
-            after = new ActionKeyframe(before.Id, timeSeconds, actionKey);
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.KeyframeSelectionRequired);
         }
-        catch (ArgumentException)
+
+        var current = actor.ActionKeyframes.SingleOrDefault(frame => frame.Id == before.Id);
+        if (!SameAction(current, before))
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.StalePreimage);
+        }
+
+        if (!IsAtTime(Playback.CurrentTimeSeconds, before.TimeSeconds))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.SelectionTimeMismatch);
+        }
+
+        var after = new ActionKeyframe(before.Id, timeSeconds, actionKey);
+        if (SameAction(before, after))
+        {
+            return SemanticEditOutcome.NoChange;
+        }
+
+        if (actor.ActionKeyframes.Any(frame =>
+                frame.Id != before.Id && IsAtTime(frame.TimeSeconds, timeSeconds)))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.DuplicateTime);
         }
 
         ClearPreview();
-        return ExecuteCommandOnTrack(
+        return ExecuteSemanticCommandOnTrack(
             TimelineTrackKind.Action,
             new UpdateActionKeyframeCommand(SelectedActorId, before, after));
     }
 
-    public SceneEditResult RemoveSelectedActionKeyframe()
+    public SceneEditResult RemoveSelectedActionKeyframe() =>
+        RemoveSelectedActionKeyframeDetailed().Result;
+
+    public SemanticEditOutcome RemoveSelectedActionKeyframeDetailed()
     {
-        if (!ActionEditAvailability.CanDelete || SelectedActorId is null || _selectedActionKeyframe is null)
+        var actor = GetSelectedActor();
+        if (actor is null || SelectedActorId is null)
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.ActorSelectionRequired);
+        }
+
+        if (Playback.IsPlaying)
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.PlaybackActive);
         }
 
         var before = _selectedActionKeyframe;
+        if (before is null)
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.KeyframeSelectionRequired);
+        }
+
+        var current = actor.ActionKeyframes.SingleOrDefault(frame => frame.Id == before.Id);
+        if (!SameAction(current, before))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.StalePreimage);
+        }
+
+        if (!IsAtTime(Playback.CurrentTimeSeconds, before.TimeSeconds))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.SelectionTimeMismatch);
+        }
+
         ClearPreview();
-        return ExecuteCommandOnTrack(
+        return ExecuteSemanticCommandOnTrack(
             TimelineTrackKind.Action,
             new RemoveActionKeyframeCommand(SelectedActorId, before));
     }
@@ -491,37 +661,50 @@ public sealed class DocumentSession
         bool enabled,
         string? targetActorId,
         double yawOffsetDegrees,
+        LockOnTrackingMode trackingMode) =>
+        AddLockOnKeyframeAtCurrentTimeDetailed(
+            enabled,
+            targetActorId,
+            yawOffsetDegrees,
+            trackingMode).Result;
+
+    public SemanticEditOutcome AddLockOnKeyframeAtCurrentTimeDetailed(
+        bool enabled,
+        string? targetActorId,
+        double yawOffsetDegrees,
         LockOnTrackingMode trackingMode)
     {
-        if (!LockOnEditAvailability.CanAdd || SelectedActorId is null)
-        {
-            return SceneEditResult.Conflict;
-        }
-
         var actor = GetSelectedActor();
-        if (actor is null)
+        if (actor is null || SelectedActorId is null)
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.ActorSelectionRequired);
         }
 
-        LockOnKeyframe keyframe;
-        try
+        if (Playback.IsPlaying)
         {
-            keyframe = new LockOnKeyframe(
-                GetNextLockOnKeyframeId(actor),
-                Playback.CurrentTimeSeconds,
-                enabled,
-                targetActorId,
-                yawOffsetDegrees,
-                trackingMode);
-        }
-        catch (ArgumentException)
-        {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.PlaybackActive);
         }
 
+        var inputIssue = ValidateLockOnInput(actor.ActorId, enabled, targetActorId, yawOffsetDegrees, trackingMode);
+        if (inputIssue is not null)
+        {
+            return SemanticEditOutcome.Conflict(inputIssue.Value);
+        }
+
+        if (actor.LockOnKeyframes.Any(frame => IsAtTime(frame.TimeSeconds, Playback.CurrentTimeSeconds)))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.DuplicateTime);
+        }
+
+        var keyframe = new LockOnKeyframe(
+            GetNextLockOnKeyframeId(actor),
+            Playback.CurrentTimeSeconds,
+            enabled,
+            targetActorId,
+            yawOffsetDegrees,
+            trackingMode);
         ClearPreview();
-        return ExecuteCommandOnTrack(
+        return ExecuteSemanticCommandOnTrack(
             TimelineTrackKind.LockOn,
             new AddLockOnKeyframeCommand(SelectedActorId, keyframe));
     }
@@ -531,48 +714,119 @@ public sealed class DocumentSession
         bool enabled,
         string? targetActorId,
         double yawOffsetDegrees,
+        LockOnTrackingMode trackingMode) =>
+        UpdateSelectedLockOnKeyframeDetailed(
+            timeSeconds,
+            enabled,
+            targetActorId,
+            yawOffsetDegrees,
+            trackingMode).Result;
+
+    public SemanticEditOutcome UpdateSelectedLockOnKeyframeDetailed(
+        double timeSeconds,
+        bool enabled,
+        string? targetActorId,
+        double yawOffsetDegrees,
         LockOnTrackingMode trackingMode)
     {
-        if (!LockOnEditAvailability.CanUpdate || SelectedActorId is null || _selectedLockOnKeyframe is null ||
-            !double.IsFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > _document.DurationSeconds ||
-            !double.IsFinite(yawOffsetDegrees))
+        if (!IsTimeWithinDocument(timeSeconds))
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.TimeOutOfRange);
+        }
+
+        var actor = GetSelectedActor();
+        if (actor is null || SelectedActorId is null)
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.ActorSelectionRequired);
+        }
+
+        if (Playback.IsPlaying)
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.PlaybackActive);
         }
 
         var before = _selectedLockOnKeyframe;
-        LockOnKeyframe after;
-        try
+        if (before is null)
         {
-            after = new LockOnKeyframe(
-                before.Id,
-                timeSeconds,
-                enabled,
-                targetActorId,
-                yawOffsetDegrees,
-                trackingMode);
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.KeyframeSelectionRequired);
         }
-        catch (ArgumentException)
+
+        var current = actor.LockOnKeyframes.SingleOrDefault(frame => frame.Id == before.Id);
+        if (!SameLockOn(current, before))
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.StalePreimage);
+        }
+
+        if (!IsAtTime(Playback.CurrentTimeSeconds, before.TimeSeconds))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.SelectionTimeMismatch);
+        }
+
+        var inputIssue = ValidateLockOnInput(actor.ActorId, enabled, targetActorId, yawOffsetDegrees, trackingMode);
+        if (inputIssue is not null)
+        {
+            return SemanticEditOutcome.Conflict(inputIssue.Value);
+        }
+
+        var after = new LockOnKeyframe(
+            before.Id,
+            timeSeconds,
+            enabled,
+            targetActorId,
+            yawOffsetDegrees,
+            trackingMode);
+        if (SameLockOn(before, after))
+        {
+            return SemanticEditOutcome.NoChange;
+        }
+
+        if (actor.LockOnKeyframes.Any(frame =>
+                frame.Id != before.Id && IsAtTime(frame.TimeSeconds, timeSeconds)))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.DuplicateTime);
         }
 
         ClearPreview();
-        return ExecuteCommandOnTrack(
+        return ExecuteSemanticCommandOnTrack(
             TimelineTrackKind.LockOn,
             new UpdateLockOnKeyframeCommand(SelectedActorId, before, after));
     }
 
-    public SceneEditResult RemoveSelectedLockOnKeyframe()
+    public SceneEditResult RemoveSelectedLockOnKeyframe() =>
+        RemoveSelectedLockOnKeyframeDetailed().Result;
+
+    public SemanticEditOutcome RemoveSelectedLockOnKeyframeDetailed()
     {
-        if (!LockOnEditAvailability.CanDelete || SelectedActorId is null || _selectedLockOnKeyframe is null)
+        var actor = GetSelectedActor();
+        if (actor is null || SelectedActorId is null)
         {
-            return SceneEditResult.Conflict;
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.ActorSelectionRequired);
+        }
+
+        if (Playback.IsPlaying)
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.PlaybackActive);
         }
 
         var before = _selectedLockOnKeyframe;
+        if (before is null)
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.KeyframeSelectionRequired);
+        }
+
+        var current = actor.LockOnKeyframes.SingleOrDefault(frame => frame.Id == before.Id);
+        if (!SameLockOn(current, before))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.StalePreimage);
+        }
+
+        if (!IsAtTime(Playback.CurrentTimeSeconds, before.TimeSeconds))
+        {
+            return SemanticEditOutcome.Conflict(SemanticEditIssue.SelectionTimeMismatch);
+        }
+
         ClearPreview();
-        return ExecuteCommandOnTrack(
+        return ExecuteSemanticCommandOnTrack(
             TimelineTrackKind.LockOn,
             new RemoveLockOnKeyframeCommand(SelectedActorId, before));
     }
@@ -735,6 +989,52 @@ public sealed class DocumentSession
         }
 
         return result;
+    }
+
+    private SemanticEditOutcome ExecuteSemanticCommandOnTrack(
+        TimelineTrackKind track,
+        ISceneEditCommand command) => ExecuteCommandOnTrack(track, command) switch
+        {
+            SceneEditResult.Applied => SemanticEditOutcome.Applied,
+            SceneEditResult.NoChange => SemanticEditOutcome.NoChange,
+            SceneEditResult.Conflict => SemanticEditOutcome.Conflict(SemanticEditIssue.Conflict),
+            var result => throw new InvalidOperationException($"Unknown scene edit result: {result}"),
+        };
+
+    private bool IsTimeWithinDocument(double timeSeconds) =>
+        double.IsFinite(timeSeconds) && timeSeconds >= 0 && timeSeconds <= _document.DurationSeconds;
+
+    private SemanticEditIssue? ValidateLockOnInput(
+        string actorId,
+        bool enabled,
+        string? targetActorId,
+        double yawOffsetDegrees,
+        LockOnTrackingMode trackingMode)
+    {
+        if (targetActorId is not null &&
+            (string.IsNullOrWhiteSpace(targetActorId) ||
+             targetActorId == actorId ||
+             !_document.Actors.Any(actor => actor.ActorId == targetActorId)))
+        {
+            return SemanticEditIssue.InvalidLockOnTarget;
+        }
+
+        if (enabled && targetActorId is null)
+        {
+            return SemanticEditIssue.InvalidLockOnTarget;
+        }
+
+        if (!double.IsFinite(yawOffsetDegrees))
+        {
+            return SemanticEditIssue.InvalidYawOffset;
+        }
+
+        if (!Enum.IsDefined(trackingMode))
+        {
+            return SemanticEditIssue.InvalidTrackingMode;
+        }
+
+        return null;
     }
 
     private SceneEditResult TryExecuteDetailed(
@@ -1148,6 +1448,12 @@ public sealed class DocumentSession
             ((selectionChange.Keyframe is null && GetSelectedActionKeyframe() is null) ||
              SameAction(selectionChange.Keyframe, GetSelectedActionKeyframe())))
         {
+            _lastActionSelectionPublication = new ActionSelectionPublication(
+                ++_actionSelectionPublicationSequence,
+                SelectedActorId,
+                ActiveTimelineTrack,
+                SelectedActionKeyframeId,
+                GetSelectedActionKeyframe());
             ActionKeyframeSelectionChanged?.Invoke(this, selectionChange);
         }
     }
@@ -1160,9 +1466,37 @@ public sealed class DocumentSession
             ((selectionChange.Keyframe is null && GetSelectedLockOnKeyframe() is null) ||
              SameLockOn(selectionChange.Keyframe, GetSelectedLockOnKeyframe())))
         {
+            _lastLockOnSelectionPublication = new LockOnSelectionPublication(
+                ++_lockOnSelectionPublicationSequence,
+                SelectedActorId,
+                ActiveTimelineTrack,
+                SelectedLockOnKeyframeId,
+                GetSelectedLockOnKeyframe());
             LockOnKeyframeSelectionChanged?.Invoke(this, selectionChange);
         }
     }
+
+    private bool WasActionTargetPublishedSince(
+        long sequence,
+        string actorId,
+        ActionKeyframe keyframe) =>
+        _lastActionSelectionPublication is { } publication &&
+        publication.Sequence > sequence &&
+        publication.ActorId == actorId &&
+        publication.ActiveTrack == TimelineTrackKind.Action &&
+        publication.KeyframeId == keyframe.Id &&
+        SameAction(publication.Keyframe, keyframe);
+
+    private bool WasLockOnTargetPublishedSince(
+        long sequence,
+        string actorId,
+        LockOnKeyframe keyframe) =>
+        _lastLockOnSelectionPublication is { } publication &&
+        publication.Sequence > sequence &&
+        publication.ActorId == actorId &&
+        publication.ActiveTrack == TimelineTrackKind.LockOn &&
+        publication.KeyframeId == keyframe.Id &&
+        SameLockOn(publication.Keyframe, keyframe);
 
     private void RaiseAllSelectionAndAvailabilityChanged(
         TransformKeyframeSelectionChangedEventArgs? transformSelectionChange,
@@ -1667,6 +2001,20 @@ public sealed class DocumentSession
         EditAvailabilityChangedEventArgs? TransformAvailabilityChange,
         TimelineEditAvailabilityChangedEventArgs? TimelineAvailabilityChange,
         SelectionChangedEventArgs? ActorSelectionChange);
+
+    private sealed record ActionSelectionPublication(
+        long Sequence,
+        string? ActorId,
+        TimelineTrackKind ActiveTrack,
+        string? KeyframeId,
+        ActionKeyframe? Keyframe);
+
+    private sealed record LockOnSelectionPublication(
+        long Sequence,
+        string? ActorId,
+        TimelineTrackKind ActiveTrack,
+        string? KeyframeId,
+        LockOnKeyframe? Keyframe);
 
     private abstract record SemanticRollbackWorkItem;
 

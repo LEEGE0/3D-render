@@ -229,6 +229,8 @@ Update는 Execute에서 before→after, Undo에서 after→before를 검증한�
 
 편집 가능 여부는 선택 actor, track별 selected marker, 재생 여부와 현재 time을 함께 본다. 재생 중에는 세 track Update/Add/Delete와 Apply/Undo/Redo를 잠근다. paused여도 현재 time이 해당 selected marker time과 다르면 Update를 잠그며, Add는 같은 track/current time에 marker가 있을 때 잠긴다. Delete는 selection을 요구하고 Transform에만 마지막 marker guard가 있다. 잠금 전이는 진행 중인 TopView drag/Transform Inspector preview를 취소하고 모든 관련 control을 비활성화하며 이유를 `TimelineStatus`와 track별 ErrorLabel에 표시한다. Stop은 언제나 0초로 이동하며, 그 시각의 세 track exact marker selection을 다시 계산한다.
 
+Action/Lock-on marker 선택은 observer가 seek를 다시 바꿀 수 있다는 전제에서 최대 32회의 bounded 안정화 루프를 사용한다. 매 회 최신 문서에서 target actor와 full keyframe을 다시 읽고 pause·target time seek를 수행한 뒤 actor, time, playing, active track, selected ID와 full payload가 모두 target과 일치할 때만 `Applied`를 반환한다. 두 번 이상 유한하게 다른 시각으로 리디렉션돼도 다시 target을 시도하며, attempt 시작 이후 실제 게시된 selection의 actor/track/ID/full-frame 서명을 사용해 이전 attempt의 force 상태를 누적하지 않고 최종 안정 target full payload를 정확히 한 번만 게시한다. 같은 시각 무-seek cross-track과 rollback 뒤 이동된 frame selection 보존 상태는 실제 target 게시가 없으면 한 번 강제 게시하고, final event observer가 active track을 바꾸면 복원된 target context를 다시 게시한다. target이 사라지거나 32회 안에 안정화되지 않으면 호출 전 actor/time/playing/track/세 selection을 원자적으로 복구하고 성공을 보고하지 않는다.
+
 후속 full timeline은 확대·스크롤·시간 스냅과 선택 keyframe drag/복제 정책을 추가한다. 현재 단계는 Action/Lock-on 단계 track 편집과 교육 overlay까지 구현했지만, Lock-on target 방향에 따른 actor Yaw 계산, 자유 방향/Lock-on 이동 궤적, 실제 DSR animation, render 실행이나 gamepad 입력은 구현하지 않았다.
 
 ## 속성 패널
@@ -245,9 +247,17 @@ Update는 Execute에서 before→after, Undo에서 after→before를 검증한�
 
 재생 중이거나 selected marker와 다른 시각이면 Time 포함 다섯 SpinBox와 Apply를 비활성화하고 Undo/Redo도 잠근다. 프로그래밍 방식 signal이나 남아 있던 입력이 들어와도 controller가 `CanEditSelectedTransform`을 다시 확인해 committed selected keyframe 값을 복원하고 잠금 이유를 보여준다. 이 UI 잠금은 history를 삭제하는 기능이 아니므로 marker를 선택해 편집 가능한 시각으로 돌아오면 기존 `CanUndo/CanRedo`에 맞게 버튼 상태가 복원된다.
 
-`ActionLockOnInspectorController`는 `ActiveTimelineTrack`에 따라 세 section의 `Visible`을 전환한다. session은 semantic marker 선택에서 target active track을 pause/seek보다 먼저 바꾸므로 controller가 seek 중 받은 selection event에도 올바른 section을 표시한다. Action↔Lock-on marker가 같은 시각이라 seek event가 없는 경우에는 target selection payload를 강제로 다시 받아 visibility를 전환한다. Action section은 selection label, Time, ActionKey, Apply, ErrorLabel을 가지며 key/time은 command 하나로 제출한다. Lock-on section은 selection label, Time, enabled, target, mode, yaw offset, Apply, ErrorLabel을 가지며 다섯 의미 값을 command 하나로 제출한다. target 목록은 document/actor selection 변경마다 self를 제외해 다시 만들고 committed target을 재선택한다. semantic 입력은 Apply 또는 Enter 전에는 로컬 UI 값일 뿐 preview/revision/history를 만들지 않는다.
+`ActionLockOnInspectorController`는 `ActiveTimelineTrack`에 따라 세 section의 `Visible`을 전환한다. session은 semantic marker 선택에서 target active track을 pause/seek보다 먼저 바꾸므로 controller가 seek 중 받은 selection event에도 올바른 section을 표시한다. Action↔Lock-on marker가 같은 시각이라 seek event가 없는 경우에는 target selection payload를 강제로 다시 받아 visibility를 전환한다. 아직 marker가 없는 트랙은 해당 Action/Lock-on lane의 빈 배경을 클릭하면 활성화된다. 이 경로는 marker를 선택하지 않고 현재 actor의 full selection payload만 다시 게시하므로 문서 revision, history, playback time/playing을 바꾸지 않으면서 첫 Add용 Inspector를 표시한다. Action section은 selection label, Time, ActionKey, Apply, ErrorLabel을 가지며 key/time은 command 하나로 제출한다. Lock-on section은 selection label, Time, enabled, target, mode, yaw offset, Apply, ErrorLabel을 가지며 다섯 의미 값을 command 하나로 제출한다. target 목록은 document/actor selection 변경마다 self를 제외해 다시 만들고 committed target을 재선택한다. semantic 입력은 Apply 또는 Enter 전에는 로컬 UI 값일 뿐 preview/revision/history를 만들지 않는다.
 
-Action 공백, 활성 Lock-on target 없음, no-op, stale/time/target conflict는 track별 ErrorLabel에 한글로 남는다. 재생 중에는 input과 Apply가 잠기며 signal을 강제로 발생시켜도 session availability guard가 mutation을 거부한다. semantic controller들은 생성 시 연결한 Button/LineEdit/session/playback/document event를 `Dispose()`에서 정확히 해제한다.
+semantic session API는 `SemanticEditOutcome`과 `SemanticEditIssue`로 성공, no-op, duplicate time, stale preimage, time range, ActionKey, Lock-on target/yaw/mode와 기타 conflict를 구분한다. controller는 예외 문자열을 해석하지 않고 이 typed outcome을 다음과 같은 실제 한글 메시지로 변환한다.
+
+- no-op: `<작업>: 적용할 실제 Action/Lock-on 변경이 없습니다.`
+- duplicate time: `<작업> 실패: 해당 시각에는 이미 Action/Lock-on 키프레임이 있습니다.`
+- stale preimage: `<작업> 실패: 선택 정보가 오래되어 최신 문서와 충돌했습니다.`
+- time range: `<작업> 실패: 시각은 0초 이상 <문서 길이>초 이하여야 합니다.`
+- invalid target: `<작업> 실패: Lock-on 대상은 같은 문서의 다른 배우여야 하며 활성 상태에는 대상이 필요합니다.`
+
+`SemanticTimelineController`와 `ActionLockOnInspectorController`는 semantic 명령 호출 직전 revision을 캡처한다. observer 예외가 발생했더라도 revision이 증가했다면 mutation과 history 전이가 완료된 것이므로 `<작업>: 변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다: <예외 메시지>`를 표시하고 최신 selection/availability를 다시 읽는다. revision이 그대로인 예기치 않은 예외나 프로그래밍 오류는 UI 문자열로 삼키지 않고 원래 예외 그대로 전파한다. 예상 가능한 validation·conflict·no-op은 예외가 아니라 typed outcome으로 표시한다. 성공한 다음 작업은 해당 track ErrorLabel을 비운다. 재생 중에는 input과 Apply가 잠기며 signal을 강제로 발생시켜도 session availability guard가 mutation을 거부한다. semantic controller들은 생성 시 연결한 Button/LineEdit/session/playback/document event를 `Dispose()`에서 정확히 해제한다.
 
 ## 기본 편집 런타임 통합 검사
 
@@ -310,21 +320,22 @@ TIMELINE_KEYFRAME_CRUD_READY add=1 update=1 time_move=1 delete=1 undo=1 redo=1 d
 
 probe는 transform 검증이 남긴 `revision=15`, Top/World apply `32/32`, runtime actor의 단일 transform `(1,0,0), 0°`와 기존 history를 hand-derived 시작점으로 고정한다. 기존 actor를 바꾸지 않고 `(4,0,3)`의 `runtime-target`을 두 번째 actor로 추가한 뒤 새 history event만 별도로 센다. 기대값은 실행 결과에서 다시 계산하지 않고 각 mutation/document event/seek를 독립 계산한 literal revision/history/apply count로 비교한다.
 
-1. ActionKey `windup` Add, Action surface viewport marker click, SpinBox time `0.2` ValueChanged와 ActionKey `attack` Apply button을 실행한다. 이어 같은 값을 LineEdit TextSubmitted로 다시 제출해 no-op의 revision/history/apply count 불변과 오류 문구를 확인한다.
+1. marker가 없는 Action lane의 빈 배경에 실제 viewport mouse press/release를 보내 Action Inspector와 보이는 ActionKey/Add control이 나타나되 revision/history/playback이 불변인지 확인한다. ActionKey `windup` 첫 Add에는 one-shot document observer 예외를 넣어 mutation/history는 확정되고 `변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다:`가 표시되는지 검증한다. Action surface viewport marker click 뒤 범위 밖 time Apply의 typed 오류를 확인하고, SpinBox time `0.2`와 ActionKey `attack` Apply 성공이 오류를 지우는지 확인한다. 이어 같은 값을 LineEdit TextSubmitted로 다시 제출해 no-op의 revision/history/apply count 불변과 전용 오류 문구를 확인한다.
 2. Action Inspector와 marker를 활성 상태로 유지한 채 항상 보이는 global Undo/Redo 버튼으로 Action Apply의 preimage/postimage와 selection/time을 왕복한다.
 3. HSlider grabber geometry에서 hand-derived `0.75` 위치로 viewport mouse press/release를 보내 scrub하고 Action `attack` left-hold, TopView의 실제 `DisplayedSemanticOverlays`, World `ActionLabel` text/visibility를 확인한 뒤 Action marker를 다시 클릭하고 Delete한다.
-4. target OptionButton `runtime-target`, mode `Continuous`, enabled와 offset `15°`로 Lock-on을 Add하고 Lock-on surface viewport marker click으로 Inspector의 full frame을 확인한다.
-5. OptionButton `Snap`, SpinBox offset `-30°`, Lock Apply 버튼으로 postimage를 만들고 Lock Inspector를 활성 상태로 유지한 채 global Undo/Redo로 preimage와 postimage를 왕복한다.
+4. marker가 없는 Lock-on lane의 빈 배경을 실제 viewport input으로 클릭해 Lock-on Inspector와 입력/Add control을 표시하되 상태가 불변인지 확인한다. enabled인데 target이 없는 실제 Add signal의 typed target 오류를 확인한 뒤 target OptionButton `runtime-target`, mode `Continuous`, enabled와 offset `15°`로 첫 Lock-on을 Add하고 Lock-on surface viewport marker click으로 Inspector의 full frame을 확인한다.
+5. SpinBox offset `20°` Lock Apply에 one-shot document observer 예외를 넣어 확정 mutation과 observer 실패 안내를 함께 검증한다. 이어 OptionButton `Snap`, offset `-30°` Apply 성공이 오류를 지우는지 확인하고, Lock Inspector를 활성 상태로 유지한 채 global Undo/Redo로 `20°/Continuous` preimage와 `-30°/Snap` postimage를 왕복한다.
 6. Lock-on Delete 뒤 global Undo로 overlay 확인용 frame을 복원한다. `0.75` scrub에서 Action 없음, Lock-on `runtime-target/Snap/-30°` left-hold, 실제 Top surface line `(1,0,0)→(4,0,3)`, World `LockBadge`와 `LockLine` visibility를 확인한다.
-7. `0.75`의 빈 exact time에서 Action/Lock Add와 global Undo/Redo가 paused 상태에서 enabled임을 먼저 확인한다. 재생 중 유효 입력을 다시 채워 여섯 semantic Add/Apply/Delete와 global Undo/Redo의 실제 signal을 모두 보내고 revision/history/Top/World apply count 불변 및 각 잠금 사유를 확인한다. 검증용 Action 하나를 paused 상태에서 추가한 뒤 playback guard 종료 상태는 `revision=28`, semantic history event `12`, Top/World apply `53/53`이다.
-8. Action이 활성인 `0.75`초에서 실제 Lock-on surface의 `0.2`초 marker를 클릭하고 Lock-on Inspector만 표시되는지 확인한다. 이어 실제 Action surface의 `0.75`초 marker를 클릭해 Action Inspector만 표시되는지 확인한다. 두 cross-track·cross-time seek 뒤 revision/history는 `28/12`로 불변이고 hand-derived Top/World apply count는 `55/55`다.
-9. 실제 slider를 `0.2`초로 scrub하고 Action Add signal로 Lock-on과 같은 시각의 두 번째 Action marker를 만든다. Lock-on surface → Action surface를 같은 시각에서 클릭해 seek/apply 없이 각 target Inspector만 표시되는지 확인한다. 최종 hand-derived revision/history는 `29/13`, Top/World apply count는 `57/57`이다. 전체 probe는 wait, sleep, `_Process` 횟수, source-string assertion과 test-only production API를 사용하지 않는다.
+7. `0.75`의 빈 exact time에서 Action/Lock Add와 global Undo/Redo가 paused 상태에서 enabled임을 먼저 확인한다. 재생 중 유효 입력을 다시 채워 여섯 semantic Add/Apply/Delete와 global Undo/Redo의 실제 signal을 모두 보내고 revision/history/Top/World apply count 불변 및 각 잠금 사유를 확인한다. 검증용 Action 하나를 paused 상태에서 추가한 뒤 playback guard 종료 상태는 `revision=29`, semantic history event `13`, Top/World apply `54/54`이다.
+8. Action이 활성인 `0.75`초에서 실제 Lock-on surface의 `0.2`초 marker를 클릭하고 Lock-on Inspector만 표시되는지 확인한다. 이어 실제 Action surface의 `0.75`초 marker를 클릭해 Action Inspector만 표시되는지 확인한다. 두 cross-track·cross-time seek 뒤 revision/history는 `29/13`으로 불변이고 hand-derived Top/World apply count는 `56/56`이다.
+9. 실제 slider를 `0.2`초로 scrub하고 Action Add signal로 Lock-on과 같은 시각의 두 번째 Action marker를 만든다. Lock-on surface → Action surface를 같은 시각에서 클릭해 seek/apply 없이 각 target Inspector만 표시되는지 확인한다. 같은 시각 Action Add 재시도는 typed duplicate 오류를 표시하고 상태를 바꾸지 않는다. 최종 hand-derived revision/history는 `30/14`, Top/World apply count는 `58/58`이다. 전체 probe는 wait, sleep, `_Process` 횟수, source-string assertion과 test-only production API를 사용하지 않는다.
 
 모든 assertion을 통과해야 다음 exact marker가 출력된다. `/1→/2` migration과 `/2` round-trip은 Editor가 Infrastructure를 참조하지 않으므로 이 marker가 아니라 Infrastructure 전체 테스트로 검증한다.
 
 ```text
 ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1
 ACTION_LOCK_ON_PLAYBACK_GUARDS_READY action_add=1 action_apply=1 action_delete=1 lock_add=1 lock_apply=1 lock_delete=1 undo=1 redo=1
+ACTION_LOCK_ON_REVIEW_FIXES_READY empty_action_add=1 empty_lock_add=1 detailed_errors=1 observer_commit=1
 ```
 
 ## 재생 모드와 편집 모드
