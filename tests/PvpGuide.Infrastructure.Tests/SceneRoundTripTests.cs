@@ -21,7 +21,7 @@ public sealed class SceneRoundTripTests
         var json = serializer.Serialize(original);
         var reopened = serializer.Deserialize(json);
 
-        Assert.Contains("\n  \"schema\": \"pvp-guide-scene/1\"", json, StringComparison.Ordinal);
+        Assert.Contains("\n  \"schema\": \"pvp-guide-scene/2\"", json, StringComparison.Ordinal);
         Assert.DoesNotContain("revision", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("currentTime", json, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, reopened.Revision);
@@ -43,8 +43,41 @@ public sealed class SceneRoundTripTests
             Assert.Equal(expected.Role, actual.Role);
             Assert.Equal(expected.TransformKeyframes.Select(FrameShape), actual.TransformKeyframes.Select(FrameShape));
             Assert.Equal(expected.ActionKeyframes.Select(frame => (frame.Id, frame.TimeSeconds, frame.ActionKey)), actual.ActionKeyframes.Select(frame => (frame.Id, frame.TimeSeconds, frame.ActionKey)));
-            Assert.Equal(expected.LockOnKeyframes.Select(frame => (frame.Id, frame.TimeSeconds, frame.Enabled, frame.TargetActorId)), actual.LockOnKeyframes.Select(frame => (frame.Id, frame.TimeSeconds, frame.Enabled, frame.TargetActorId)));
+            Assert.Equal(
+                expected.LockOnKeyframes.Select(frame => (frame.Id, frame.TimeSeconds, frame.Enabled, frame.TargetActorId, frame.YawOffsetDegrees, frame.TrackingMode)),
+                actual.LockOnKeyframes.Select(frame => (frame.Id, frame.TimeSeconds, frame.Enabled, frame.TargetActorId, frame.YawOffsetDegrees, frame.TrackingMode)));
         }
+    }
+
+    [Fact]
+    public void Version_one_lock_on_migrates_to_version_two_defaults()
+    {
+        var document = new SceneDocumentSerializer().Deserialize(VersionOneSceneJson);
+        var frame = document.Actors.Single().LockOnKeyframes.Single();
+
+        Assert.Equal(0, frame.YawOffsetDegrees);
+        Assert.Equal(LockOnTrackingMode.Continuous, frame.TrackingMode);
+    }
+
+    [Fact]
+    public void Version_one_rejects_explicit_null_lock_on_semantics()
+    {
+        var root = JsonNode.Parse(VersionOneSceneJson)!.AsObject();
+        var lockOn = root["actors"]![0]!["lockOnKeyframes"]![0]!.AsObject();
+        lockOn["yawOffsetDegrees"] = null;
+        lockOn["trackingMode"] = null;
+
+        Assert.Throws<InvalidDataException>(() => new SceneDocumentSerializer().Deserialize(root.ToJsonString()));
+    }
+
+    [Fact]
+    public void Serialize_writes_version_two_lock_on_semantics()
+    {
+        var json = new SceneDocumentSerializer().Serialize(CreateDocument());
+
+        Assert.Contains("\"schema\": \"pvp-guide-scene/2\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"trackingMode\": \"keyframe_only\"", json, StringComparison.Ordinal);
+        Assert.Contains("\"yawOffsetDegrees\": -15", json, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -53,8 +86,66 @@ public sealed class SceneRoundTripTests
         var serializer = new SceneDocumentSerializer();
         var json = serializer.Serialize(CreateDocument());
 
-        Assert.Throws<InvalidDataException>(() => serializer.Deserialize(json.Replace(SceneDocument.Schema, "pvp-guide-scene/2", StringComparison.Ordinal)));
+        Assert.Throws<InvalidDataException>(() => serializer.Deserialize(json.Replace(SceneDocument.Schema, "pvp-guide-scene/3", StringComparison.Ordinal)));
         Assert.Throws<JsonException>(() => serializer.Deserialize(json.Insert(json.IndexOf('{') + 1, "\n  \"unexpected\": true,")));
+    }
+
+    [Theory]
+    [InlineData("invalid-mode")]
+    [InlineData("null-mode")]
+    [InlineData("missing-mode")]
+    [InlineData("missing-offset")]
+    [InlineData("nonfinite-offset")]
+    public void Deserialize_rejects_invalid_version_two_lock_on_semantics(string mutation)
+    {
+        var root = JsonNode.Parse(ValidSceneJson)!.AsObject();
+        var lockOn = root["actors"]![0]!["lockOnKeyframes"]![0]!.AsObject();
+        string json;
+        switch (mutation)
+        {
+            case "invalid-mode":
+                lockOn["trackingMode"] = "future";
+                break;
+            case "null-mode":
+                lockOn["trackingMode"] = null;
+                break;
+            case "missing-mode":
+                lockOn.Remove("trackingMode");
+                break;
+            case "missing-offset":
+                lockOn.Remove("yawOffsetDegrees");
+                break;
+            case "nonfinite-offset":
+                json = ValidSceneJson.Replace("\"yawOffsetDegrees\": 0", "\"yawOffsetDegrees\": 1e999", StringComparison.Ordinal);
+                Assert.Throws<InvalidDataException>(() => new SceneDocumentSerializer().Deserialize(json));
+                return;
+            default:
+                throw new InvalidOperationException($"Unknown test mutation '{mutation}'.");
+        }
+
+        json = root.ToJsonString();
+        Assert.Throws<InvalidDataException>(() => new SceneDocumentSerializer().Deserialize(json));
+    }
+
+    [Fact]
+    public async Task LoadAsync_rejects_invalid_version_two_json_without_modifying_the_source_file()
+    {
+        var directory = CreateUniqueTestDirectory();
+        try
+        {
+            var path = Path.Combine(directory, "scene.pvpscene.json");
+            var invalidJson = ValidSceneJson.Replace("\"trackingMode\": \"continuous\"", "\"trackingMode\": null", StringComparison.Ordinal);
+            var originalBytes = System.Text.Encoding.UTF8.GetBytes(invalidJson);
+            await File.WriteAllBytesAsync(path, originalBytes, TestContext.Current.CancellationToken);
+
+            await Assert.ThrowsAsync<InvalidDataException>(() => new SceneDocumentSerializer().LoadAsync(path, TestContext.Current.CancellationToken));
+
+            Assert.Equal(originalBytes, await File.ReadAllBytesAsync(path, TestContext.Current.CancellationToken));
+        }
+        finally
+        {
+            DeleteUniqueTestDirectory(directory);
+        }
     }
 
     [Theory]
@@ -331,20 +422,23 @@ public sealed class SceneRoundTripTests
                     new TransformKeyframe("t1", 2, new Position3(4, 5, 6), 1),
                 ],
                 [new ActionKeyframe("a0", 0, "idle"), new ActionKeyframe("a1", 1, "attack")],
-                [new LockOnKeyframe("l0", 0, false, "invader"), new LockOnKeyframe("l1", 1, true, "invader")]),
+                [
+                    new LockOnKeyframe("l0", 0, false, "invader", -15, LockOnTrackingMode.KeyframeOnly),
+                    new LockOnKeyframe("l1", 1, true, "invader", 20, LockOnTrackingMode.Snap),
+                ]),
             new ActorTrack(
                 "invader",
                 "Invader Beta",
                 "invader",
                 [new TransformKeyframe("t0", 0, new Position3(-1, 0, 2), 180)],
                 [new ActionKeyframe("a0", 0, "guard")],
-                [new LockOnKeyframe("l0", 0, true, "host")]),
+                [new LockOnKeyframe("l0", 0, true, "host", 0, LockOnTrackingMode.Continuous)]),
         ],
         importMetadata: new ImportMetadata("synthetic-format", "{\"unknown\":42}"));
 
     private const string ValidSceneJson = """
         {
-          "schema": "pvp-guide-scene/1",
+          "schema": "pvp-guide-scene/2",
           "documentId": "structure-test",
           "name": "Structure test",
           "note": null,
@@ -367,7 +461,14 @@ public sealed class SceneRoundTripTests
                 { "id": "action", "timeSeconds": 0, "actionKey": "idle" }
               ],
               "lockOnKeyframes": [
-                { "id": "lock", "timeSeconds": 0, "enabled": false, "targetActorId": null }
+                {
+                  "id": "lock",
+                  "timeSeconds": 0,
+                  "enabled": false,
+                  "targetActorId": null,
+                  "yawOffsetDegrees": 0,
+                  "trackingMode": "continuous"
+                }
               ]
             }
           ],
@@ -375,6 +476,37 @@ public sealed class SceneRoundTripTests
             "sourceFormat": "synthetic-format",
             "rawSourcePayload": "{}"
           }
+        }
+        """;
+
+    private const string VersionOneSceneJson = """
+        {
+          "schema": "pvp-guide-scene/1",
+          "documentId": "version-one",
+          "name": "Version one",
+          "note": null,
+          "durationSeconds": 1,
+          "framesPerSecond": 30,
+          "actors": [
+            {
+              "actorId": "actor",
+              "displayName": "Actor",
+              "role": "host",
+              "transformKeyframes": [
+                {
+                  "id": "transform",
+                  "timeSeconds": 0,
+                  "position": { "x": 0, "y": 0, "z": 0 },
+                  "yawDegrees": 0
+                }
+              ],
+              "actionKeyframes": [],
+              "lockOnKeyframes": [
+                { "id": "lock", "timeSeconds": 0, "enabled": false, "targetActorId": null }
+              ]
+            }
+          ],
+          "importMetadata": null
         }
         """;
 

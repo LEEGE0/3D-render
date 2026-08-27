@@ -51,7 +51,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
         _readOnlyActors = _actors.AsReadOnly();
     }
 
-    public const string Schema = "pvp-guide-scene/1";
+    public const string Schema = "pvp-guide-scene/2";
 
     public string DocumentId { get; }
 

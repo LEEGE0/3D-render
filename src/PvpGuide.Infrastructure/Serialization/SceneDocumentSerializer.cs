@@ -10,6 +10,8 @@ namespace PvpGuide.Infrastructure.Serialization;
 public sealed class SceneDocumentSerializer
 {
     private const string SceneExtension = ".pvpscene.json";
+    private const string LegacySchemaV1 = "pvp-guide-scene/1";
+    private const string CurrentSchemaV2 = "pvp-guide-scene/2";
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -44,10 +46,13 @@ public sealed class SceneDocumentSerializer
         var dto = JsonSerializer.Deserialize<SceneDocumentDto>(json, JsonOptions)
             ?? throw new InvalidDataException("Scene JSON cannot be null.");
         ValidateStructure(dto);
-        if (!string.Equals(dto.Schema, SceneDocument.Schema, StringComparison.Ordinal))
+        var isVersionOne = string.Equals(dto.Schema, LegacySchemaV1, StringComparison.Ordinal);
+        if (!isVersionOne && !string.Equals(dto.Schema, CurrentSchemaV2, StringComparison.Ordinal))
         {
             throw new InvalidDataException($"Unsupported scene schema '{dto.Schema}'.");
         }
+
+        ValidateLockOnSemantics(dto, requireVersionTwoMembers: !isVersionOne);
 
         try
         {
@@ -61,7 +66,7 @@ public sealed class SceneDocumentSerializer
                     new Position3(frame.Position!.X, frame.Position.Y, frame.Position.Z),
                     frame.YawDegrees)),
                 actor.ActionKeyframes!.Select(frame => new ActionKeyframe(frame!.Id!, frame.TimeSeconds, frame.ActionKey!)),
-                actor.LockOnKeyframes!.Select(frame => new LockOnKeyframe(frame!.Id!, frame.TimeSeconds, frame.Enabled, frame.TargetActorId))));
+                actor.LockOnKeyframes!.Select(frame => ToLockOnKeyframe(frame!, isVersionOne))));
             var metadata = dto.ImportMetadata is null
                 ? null
                 : new ImportMetadata(dto.ImportMetadata.SourceFormat!, dto.ImportMetadata.RawSourcePayload!);
@@ -209,6 +214,34 @@ public sealed class SceneDocumentSerializer
         }
     }
 
+    private static void ValidateLockOnSemantics(SceneDocumentDto dto, bool requireVersionTwoMembers)
+    {
+        var actors = dto.Actors!;
+        for (var actorIndex = 0; actorIndex < actors.Length; actorIndex++)
+        {
+            var lockOns = actors[actorIndex]!.LockOnKeyframes!;
+            for (var frameIndex = 0; frameIndex < lockOns.Length; frameIndex++)
+            {
+                var frame = lockOns[frameIndex]!;
+                var framePath = $"$.actors[{actorIndex}].lockOnKeyframes[{frameIndex}]";
+                if (requireVersionTwoMembers || frame.HasYawOffsetDegrees)
+                {
+                    _ = RequireFinite(frame.YawOffsetDegrees, $"{framePath}.yawOffsetDegrees");
+                }
+
+                if (requireVersionTwoMembers || frame.HasTrackingMode)
+                {
+                    RequireNonEmpty(frame.TrackingMode, $"{framePath}.trackingMode");
+                }
+
+                if (frame.TrackingMode is not null)
+                {
+                    _ = ParseTrackingMode(frame.TrackingMode);
+                }
+            }
+        }
+    }
+
     private static T Require<T>(T? value, string path)
         where T : class => value ?? throw new InvalidDataException($"Scene JSON member '{path}' cannot be null.");
 
@@ -219,6 +252,42 @@ public sealed class SceneDocumentSerializer
             throw new InvalidDataException($"Scene JSON member '{path}' must be a non-empty string.");
         }
     }
+
+    private static double RequireFinite(double? value, string path)
+    {
+        if (value is null || !double.IsFinite(value.Value))
+        {
+            throw new InvalidDataException($"Scene JSON member '{path}' must be a finite number.");
+        }
+
+        return value.Value;
+    }
+
+    private static LockOnKeyframe ToLockOnKeyframe(LockOnKeyframeDto frame, bool isVersionOne) => new(
+        frame.Id!,
+        frame.TimeSeconds,
+        frame.Enabled,
+        frame.TargetActorId,
+        frame.YawOffsetDegrees ?? 0,
+        frame.TrackingMode is null && isVersionOne
+            ? LockOnTrackingMode.Continuous
+            : ParseTrackingMode(frame.TrackingMode!));
+
+    private static LockOnTrackingMode ParseTrackingMode(string value) => value switch
+    {
+        "snap" => LockOnTrackingMode.Snap,
+        "continuous" => LockOnTrackingMode.Continuous,
+        "keyframe_only" => LockOnTrackingMode.KeyframeOnly,
+        _ => throw new InvalidDataException($"Unsupported lock-on tracking mode '{value}'."),
+    };
+
+    private static string FormatTrackingMode(LockOnTrackingMode trackingMode) => trackingMode switch
+    {
+        LockOnTrackingMode.Snap => "snap",
+        LockOnTrackingMode.Continuous => "continuous",
+        LockOnTrackingMode.KeyframeOnly => "keyframe_only",
+        _ => throw new InvalidDataException($"Unsupported lock-on tracking mode '{trackingMode}'."),
+    };
 
     private static SceneDocumentDto ToDto(SceneDocument document) => new()
     {
@@ -252,6 +321,8 @@ public sealed class SceneDocumentSerializer
                 TimeSeconds = frame.TimeSeconds,
                 Enabled = frame.Enabled,
                 TargetActorId = frame.TargetActorId,
+                YawOffsetDegrees = frame.YawOffsetDegrees,
+                TrackingMode = FormatTrackingMode(frame.TrackingMode),
             }).ToArray(),
         }).ToArray(),
         ImportMetadata = document.ImportMetadata is null
@@ -309,10 +380,35 @@ public sealed class SceneDocumentSerializer
 
     private sealed class LockOnKeyframeDto
     {
+        private double? _yawOffsetDegrees;
+        private string? _trackingMode;
+
         public required string? Id { get; init; }
         public required double TimeSeconds { get; init; }
         public required bool Enabled { get; init; }
         public string? TargetActorId { get; init; }
+        public double? YawOffsetDegrees
+        {
+            get => _yawOffsetDegrees;
+            init
+            {
+                HasYawOffsetDegrees = true;
+                _yawOffsetDegrees = value;
+            }
+        }
+
+        public string? TrackingMode
+        {
+            get => _trackingMode;
+            init
+            {
+                HasTrackingMode = true;
+                _trackingMode = value;
+            }
+        }
+
+        internal bool HasYawOffsetDegrees { get; private init; }
+        internal bool HasTrackingMode { get; private init; }
     }
 
     private sealed class ImportMetadataDto

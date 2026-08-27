@@ -160,7 +160,13 @@ public sealed class TopviewGuideV1Importer
                     builder.Actions.Add(new ActionKeyframe(frameId, timeSeconds, RequiredString(actor, "action")));
                     var lockEnabled = RequiredBoolean(actor, "lock_on");
                     var targetActorId = OptionalString(actor, "lock_target");
-                    builder.LockOns.Add(new LockOnKeyframe(frameId, timeSeconds, lockEnabled, targetActorId));
+                    builder.LockOns.Add(new LockOnKeyframe(
+                        frameId,
+                        timeSeconds,
+                        lockEnabled,
+                        targetActorId,
+                        yawOffsetDegrees: 0,
+                        trackingMode: LockOnTrackingMode.Continuous));
                     actorIndex++;
                 }
 

@@ -1,6 +1,7 @@
 using System.Reflection;
 using System.Text.Json.Nodes;
 using PvpGuide.Domain;
+using PvpGuide.Domain.Timeline;
 using PvpGuide.Infrastructure.Import;
 using Xunit;
 
@@ -58,6 +59,13 @@ public sealed class TopviewGuideV1ImporterTests
         Assert.Equal("Phantom Gamma", phantom1.DisplayName);
         Assert.False(phantom1.LockOnKeyframes[0].Enabled);
         Assert.Equal("invader", phantom1.LockOnKeyframes[0].TargetActorId);
+        Assert.All(
+            result.Document.Actors.SelectMany(actor => actor.LockOnKeyframes),
+            frame =>
+            {
+                Assert.Equal(0, frame.YawOffsetDegrees);
+                Assert.Equal(LockOnTrackingMode.Continuous, frame.TrackingMode);
+            });
 
         var phantom2 = result.Document.Actors.Single(actor => actor.ActorId == "phantom2");
         Assert.Equal("attack", phantom2.ActionKeyframes.Single(frame => frame.TimeSeconds == 0.9).ActionKey);
