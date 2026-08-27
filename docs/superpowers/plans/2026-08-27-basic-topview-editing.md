@@ -317,6 +317,7 @@
 - Create: `src/PvpGuide.Editor/Features/TopView/TopViewCoordinateMapper.cs`
 - Create: `tests/PvpGuide.Editor.Tests/TopViewCoordinateMapperTests.cs`
 - Modify: `src/PvpGuide.Editor/PvpGuide.Editor.csproj`
+- Modify: `src/PvpGuide.Editor/Scenes/Main/Main.cs`
 - Modify: `scripts/Test-ProjectSkeleton.ps1`
 - Modify: `docs/superpowers/plans/2026-08-27-basic-topview-editing.md` (Task 3 완료 체크)
 
@@ -324,7 +325,7 @@
 - Consumes: `ISceneSnapshotSource`, `DocumentSession.PreviewChanged`, `TransformPreview`
 - Produces: explicit initial `ProjectCurrent()`, revision-deduplicated shared snapshot delivery, shared preview/clear delivery, screen/world mapping and hit-test helpers
 
-- [ ] **Step 1: projection 이동과 초기 투영 실패 테스트를 작성한다**
+- [x] **Step 1: projection 이동과 초기 투영 실패 테스트를 작성한다**
 
   기존 controller 테스트를 Application.Tests로 옮기고 namespace를 `PvpGuide.Application.Projection`으로 바꾼다. 다음 테스트를 추가한다.
 
@@ -348,11 +349,11 @@
 
   같은 revision에서 명시적 초기 투영은 한 번만, 다음 document revision은 한 번씩, Dispose 후에는 모두 중단되는 기존 계약을 유지한다.
 
-- [ ] **Step 2: controller 이동·ProjectCurrent를 최소 구현하고 테스트한다**
+- [x] **Step 2: controller 이동·ProjectCurrent를 최소 구현하고 테스트한다**
 
-  `ISceneProjectionConsumer`와 controller를 Application으로 이동한다. `ProjectCurrent()`는 현재 snapshot을 만들고 `_lastProjectedRevision`과 같으면 중복하지 않는다. public API와 event handler는 공통 private `ProjectRevision()`을 사용한다.
+  `ISceneProjectionConsumer`와 controller를 Application으로 이동한다. `ProjectCurrent()`는 disposed가 아닐 때마다 현재 snapshot을 만들고, `ProjectSnapshot()`이 snapshot revision으로 전달만 중복 억제한다. event handler는 private `ProjectRevision()`을 사용해 같은 revision event를 먼저 억제한다.
 
-- [ ] **Step 3: preview controller RED 테스트와 최소 구현을 추가한다**
+- [x] **Step 3: preview controller RED 테스트와 최소 구현을 추가한다**
 
   top/world preview consumer는 서로 다른 인스턴스여야 한다. `DocumentSession.PreviewChanged`에서 전달받은 같은 `TransformPreview?` 인스턴스를 양쪽에 한 번씩 전달하고 Dispose 후에는 전달하지 않는다.
 
@@ -365,7 +366,7 @@
 
   `TransformPreviewController`는 preview를 생성·수정하지 않고 distribution만 담당한다.
 
-- [ ] **Step 4: 탑뷰 mapper 테스트를 RED로 작성한다**
+- [x] **Step 4: 탑뷰 mapper 테스트를 RED로 작성한다**
 
   `TopViewCoordinateMapperTests`는 Godot 없이 double 기반 `ScreenPoint`를 사용한다.
 
@@ -385,11 +386,11 @@
 
   16px actor hit, 10px rotation handle hit, actor body와 handle이 겹칠 때 handle 우선, 경계 밖 miss를 검사한다.
 
-- [ ] **Step 5: mapper를 최소 구현한다**
+- [x] **Step 5: mapper를 최소 구현한다**
 
   `ScreenPoint`는 유한 double X/Y record struct다. mapper는 +Z를 화면 아래로 변환하고 `atan2(deltaScreenY, deltaScreenX)`를 `[0,360)`로 정규화한다. Godot `Vector2` 변환은 이후 adapter에만 둔다.
 
-- [ ] **Step 6: 프로젝트 참조·전체 순수 테스트·구조를 직렬 검증한다**
+- [x] **Step 6: 프로젝트 참조·전체 순수 테스트·구조를 직렬 검증한다**
 
   Editor csproj은 기존 직접 Domain ProjectReference를 Application ProjectReference로 교체하고 기존 controller 파일을 제거한다. Domain의 불변 값 타입은 Application 공개 계약을 통해 전이 참조하며 문서 mutation API를 Editor에서 호출하지 않는다. Application.Tests에는 이동된 controller 테스트를 포함한다.
 
@@ -406,12 +407,12 @@
 
   Expected: 네 프로젝트 실패 0, 구조 PASS.
 
-- [ ] **Step 7: fresh 리뷰 후 메인이 Task 3만 커밋·푸시한다**
+- [x] **Step 7: fresh 리뷰 후 메인이 Task 3만 커밋·푸시한다**
 
   리뷰는 초기 snapshot 중복 억제, same-instance delivery, preview null clear, Dispose, +Z down, yaw 0/90/180/270, pixel hit boundary를 확인한다. 승인 후 이동·생성·삭제 경로를 정확히 스테이징한다.
 
   ```powershell
-  git add -- 'src/PvpGuide.Application/Projection/ISceneProjectionConsumer.cs' 'src/PvpGuide.Application/Projection/SceneProjectionController.cs' 'src/PvpGuide.Application/Projection/ITransformPreviewConsumer.cs' 'src/PvpGuide.Application/Projection/TransformPreviewController.cs' 'src/PvpGuide.Editor/Features/ViewportSync/SceneProjectionController.cs' 'tests/PvpGuide.Editor.Tests/SceneProjectionControllerTests.cs' 'tests/PvpGuide.Application.Tests/SceneProjectionControllerTests.cs' 'tests/PvpGuide.Application.Tests/TransformPreviewControllerTests.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewCoordinateMapper.cs' 'tests/PvpGuide.Editor.Tests/TopViewCoordinateMapperTests.cs' 'src/PvpGuide.Editor/PvpGuide.Editor.csproj' 'scripts/Test-ProjectSkeleton.ps1' 'docs/superpowers/plans/2026-08-27-basic-topview-editing.md'
+  git add -- 'src/PvpGuide.Application/Projection/ISceneProjectionConsumer.cs' 'src/PvpGuide.Application/Projection/SceneProjectionController.cs' 'src/PvpGuide.Application/Projection/ITransformPreviewConsumer.cs' 'src/PvpGuide.Application/Projection/TransformPreviewController.cs' 'src/PvpGuide.Editor/Features/ViewportSync/SceneProjectionController.cs' 'src/PvpGuide.Editor/Features/ViewportSync/SceneProjectionController.cs.uid' 'tests/PvpGuide.Editor.Tests/SceneProjectionControllerTests.cs' 'tests/PvpGuide.Application.Tests/SceneProjectionControllerTests.cs' 'tests/PvpGuide.Application.Tests/TransformPreviewControllerTests.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewCoordinateMapper.cs' 'tests/PvpGuide.Editor.Tests/TopViewCoordinateMapperTests.cs' 'src/PvpGuide.Editor/PvpGuide.Editor.csproj' 'src/PvpGuide.Editor/Scenes/Main/Main.cs' 'scripts/Test-ProjectSkeleton.ps1' 'docs/superpowers/plans/2026-08-27-basic-topview-editing.md'
   git commit -m 'refactor: 편집 투영과 탑뷰 좌표 경계 정리'
   git push
   ```

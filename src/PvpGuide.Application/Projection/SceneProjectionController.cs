@@ -1,11 +1,6 @@
 using PvpGuide.Domain;
 
-namespace PvpGuide.Editor.Features.ViewportSync;
-
-public interface ISceneProjectionConsumer
-{
-    void Apply(SceneSnapshot snapshot);
-}
+namespace PvpGuide.Application.Projection;
 
 public sealed class SceneProjectionController : IDisposable
 {
@@ -42,6 +37,17 @@ public sealed class SceneProjectionController : IDisposable
         _source.Changed += OnDocumentChanged;
     }
 
+    public void ProjectCurrent()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var snapshot = _source.CreateSnapshot(_timeSeconds);
+        ProjectSnapshot(snapshot);
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -55,14 +61,34 @@ public sealed class SceneProjectionController : IDisposable
 
     private void OnDocumentChanged(object? sender, SceneDocumentChangedEventArgs eventArgs)
     {
-        if (_disposed || _lastProjectedRevision == eventArgs.Revision)
+        if (_disposed)
+        {
+            return;
+        }
+
+        ProjectRevision(eventArgs.Revision);
+    }
+
+    private void ProjectRevision(long revision)
+    {
+        if (_lastProjectedRevision == revision)
         {
             return;
         }
 
         var snapshot = _source.CreateSnapshot(_timeSeconds);
+        ProjectSnapshot(snapshot);
+    }
+
+    private void ProjectSnapshot(SceneSnapshot snapshot)
+    {
+        if (_lastProjectedRevision == snapshot.Revision)
+        {
+            return;
+        }
+
         _topConsumer.Apply(snapshot);
         _worldConsumer.Apply(snapshot);
-        _lastProjectedRevision = eventArgs.Revision;
+        _lastProjectedRevision = snapshot.Revision;
     }
 }

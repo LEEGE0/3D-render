@@ -8,6 +8,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../PvpGuide.Domain/PvpGuide.Domain.csproj" />
+    <ProjectReference Include="../PvpGuide.Application/PvpGuide.Application.csproj" />
   </ItemGroup>
 </Project>

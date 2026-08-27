@@ -1,8 +1,8 @@
 using Godot;
+using PvpGuide.Application.Projection;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Actors;
 using PvpGuide.Domain.Timeline;
-using PvpGuide.Editor.Features.ViewportSync;
 
 namespace PvpGuide.Editor.Scenes.Main;
 

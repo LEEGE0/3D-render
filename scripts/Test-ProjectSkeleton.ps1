@@ -35,10 +35,14 @@ $requiredFiles = @(
     (Join-Path $applicationRoot 'Editing\TransformPreviewChangedEventArgs.cs'),
     (Join-Path $applicationRoot 'Commands\ISceneEditCommand.cs'),
     (Join-Path $applicationRoot 'Commands\ReplaceTransformCommand.cs'),
+    (Join-Path $applicationRoot 'Projection\ISceneProjectionConsumer.cs'),
+    (Join-Path $applicationRoot 'Projection\SceneProjectionController.cs'),
+    (Join-Path $applicationRoot 'Projection\ITransformPreviewConsumer.cs'),
+    (Join-Path $applicationRoot 'Projection\TransformPreviewController.cs'),
     (Join-Path $infrastructureRoot 'PvpGuide.Infrastructure.csproj'),
     (Join-Path $infrastructureRoot 'Serialization\SceneDocumentSerializer.cs'),
     (Join-Path $infrastructureRoot 'Import\TopviewGuideV1Importer.cs'),
-    (Join-Path $projectRoot 'Features\ViewportSync\SceneProjectionController.cs'),
+    (Join-Path $projectRoot 'Features\TopView\TopViewCoordinateMapper.cs'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs.uid'),
     (Join-Path $sampleRoot 'synthetic-topview-v1.scene.json'),
@@ -47,11 +51,13 @@ $requiredFiles = @(
     (Join-Path $testRoot 'SceneDocumentTests.cs'),
     (Join-Path $applicationTestRoot 'PvpGuide.Application.Tests.csproj'),
     (Join-Path $applicationTestRoot 'DocumentSessionTests.cs'),
+    (Join-Path $applicationTestRoot 'SceneProjectionControllerTests.cs'),
+    (Join-Path $applicationTestRoot 'TransformPreviewControllerTests.cs'),
     (Join-Path $infrastructureTestRoot 'PvpGuide.Infrastructure.Tests.csproj'),
     (Join-Path $infrastructureTestRoot 'TopviewGuideV1ImporterTests.cs'),
     (Join-Path $infrastructureTestRoot 'SceneRoundTripTests.cs'),
     (Join-Path $editorTestRoot 'PvpGuide.Editor.Tests.csproj'),
-    (Join-Path $editorTestRoot 'SceneProjectionControllerTests.cs'),
+    (Join-Path $editorTestRoot 'TopViewCoordinateMapperTests.cs'),
     (Join-Path $editorTestRoot 'RenderQueueTests.cs')
 )
 
@@ -90,7 +96,7 @@ Assert-Contains $projectFile 'renderer/rendering_method="forward_plus"' 'Forward
 Assert-Contains $csprojFile 'Godot\.NET\.Sdk/4\.7\.2' 'Godot .NET SDK 버전'
 Assert-Contains $csprojFile '<TargetFramework>net8\.0</TargetFramework>' '.NET 대상 프레임워크'
 Assert-Contains $csprojFile '<EnableDynamicLoading>true</EnableDynamicLoading>' 'Godot 동적 로딩 설정'
-Assert-Contains $csprojFile '\.\./PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Editor에서 Domain 프로젝트 참조'
+Assert-Contains $csprojFile '\.\./PvpGuide\.Application/PvpGuide\.Application\.csproj' 'Editor에서 Application 프로젝트 참조'
 Assert-Contains $testProjectFile '\.\./\.\./src/PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Domain 프로젝트 참조'
 Assert-Contains $applicationProjectFile '\.\./PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Application에서 Domain 프로젝트 참조'
 Assert-Contains $applicationTestProjectFile '\.\./\.\./src/PvpGuide\.Application/PvpGuide\.Application\.csproj' 'Application 테스트 프로젝트 참조'
