@@ -120,6 +120,10 @@ internal sealed class RemoveTransformKeyframeCommand(
 public string? SelectedTransformKeyframeId { get; private set; }
 public TransformKeyframe? GetSelectedTransform();
 public IReadOnlyList<TransformKeyframe> GetSelectedActorTransformKeyframes();
+public bool CanAddTransformKeyframe { get; private set; }
+public string? AddTransformKeyframeLockReason { get; private set; }
+public bool CanDeleteSelectedTransformKeyframe { get; private set; }
+public string? DeleteTransformKeyframeLockReason { get; private set; }
 
 public void SelectTransformKeyframe(string? keyframeId, bool seekToKeyframe = true);
 public SceneEditResult AddTransformKeyframeAtCurrentTime();
@@ -134,11 +138,20 @@ public SceneEditResult RemoveSelectedTransformKeyframe();
 
 `SelectTransformKeyframe`은 선택 actor 안에서 ID를 검증한다. 기본 호출은 playback을 pause하고 선택 keyframe 시각으로 seek한다. selection event는 최종 selection과 keyframe 정보를 불변 event args로 한 번 전달한다.
 
+```csharp
+public sealed class TransformKeyframeSelectionChangedEventArgs(
+    string? actorId,
+    string? keyframeId,
+    TransformKeyframe? keyframe) : EventArgs;
+```
+
 다음 세 가지 가능 상태를 구분한다.
 
 - `CanAddTransformKeyframe`: actor 선택, paused, 현재 시각에 기존 keyframe 없음
 - `CanEditSelectedTransform`: actor/keyframe 선택, paused, playback time이 선택 keyframe time과 허용 오차 내 일치
 - `CanDeleteSelectedTransformKeyframe`: 편집 가능하며 해당 actor의 transform keyframe이 두 개 이상
+
+각 boolean의 false 원인은 `EditLockReason`, `AddTransformKeyframeLockReason`, `DeleteTransformKeyframeLockReason`에 한글로 보관한다. Editor는 같은 시간·최소 개수 규칙을 다시 계산하지 않고 이 값을 그대로 표시한다.
 
 재생 중에는 세 동작을 모두 잠근다. 현재 시각에 keyframe이 없으면 TopView/Inspector pose 편집은 잠그되 Add는 허용한다. 현재 시각에 기존 keyframe이 있으면 Add를 거부하고 그 keyframe을 선택할 수 있게 상태 이유를 표시한다.
 
