@@ -46,6 +46,8 @@ TopViewSurface / TransformInspectorController
 - `SceneProjectionController`는 revision별 `SceneSnapshot`을 한 번 만들고 동일 인스턴스를 탑뷰와 3D 소비자에 전달한다.
 - `TransformPreviewController`는 동일한 nullable `TransformPreview` 인스턴스를 두 뷰에 전달한다. 이 값은 저장·직렬화되지 않으며 문서 revision도 올리지 않는다.
 - 마우스를 놓거나 Inspector에서 Apply/Enter를 제출할 때만 `ReplaceTransformCommand` 하나가 확정된다.
+- `DocumentSession.CommitPreviewDetailed()`는 확정 결과를 공개 `SceneEditResult`로 반환하며, 기존 `CommitPreview()` bool API는 호환성을 위해 유지되고 `Applied`일 때만 `true`를 반환한다.
+- `DocumentSession.CurrentRevision`은 `SceneDocument`를 UI에 노출하지 않고도 현재 monotonic revision을 읽게 한다. Inspector는 확정 전후 revision으로 문서 변경 후 알림 subscriber가 실패한 경우를 구분한다.
 - 현재 편집 대상은 선택 배우의 시간상 최초 변환 키프레임이다. 타임라인이 생기기 전까지 임의의 t=0 키프레임을 자동 생성하지 않는다.
 - Undo/Redo는 과거 revision 번호를 복원하지 않고 과거 의미 값을 새 변경으로 적용하므로 revision은 항상 증가한다.
 - `HistoryChanged`는 성공한 Execute/Undo/Redo의 스택 이동이 끝난 뒤에만 발생한다. Inspector 버튼은 동기 `SceneDocument.Changed` 도중의 이전 stack 상태가 아니라 이 event에서 `CanUndo/CanRedo`를 읽는다.
@@ -110,15 +112,28 @@ InspectorPanel/TransformInspector
 
 ## 명령과 Undo/Redo
 
-현재 모든 영구 변환 변경은 다음 인터페이스를 구현한 명령을 따른다.
+현재 모든 영구 변환 변경은 Application 내부에만 노출되는 다음 명령 인터페이스를 따른다. `ISceneEditCommand`는 public Editor 계약이 아니며 Editor는 `DocumentSession`의 공개 API만 사용한다.
 
 ```csharp
-public interface ISceneEditCommand
+internal interface ISceneEditCommand
 {
     bool Execute(SceneDocument document);
     bool Undo(SceneDocument document);
 }
 ```
+
+확정 결과는 명령 구현 유형을 노출하지 않는 공개 Application 계약이다.
+
+```csharp
+public enum SceneEditResult
+{
+    Applied,
+    NoChange,
+    Conflict,
+}
+```
+
+`Applied`는 문서와 history가 함께 갱신된 경우, `NoChange`는 Yaw 정규화를 포함해 의미 값이 같아 revision과 history가 바뀌지 않은 경우, `Conflict`는 preview가 잡은 preimage가 최신 문서와 달라 적용하지 않은 경우다. `CommitPreviewDetailed()`이 이 값을 반환하고 bool `CommitPreview()`는 `Applied`에 대한 호환 wrapper로만 남는다.
 
 `ReplaceTransformCommand`는 actor ID, keyframe ID, 실행 전 expected 값과 실행 후 값을 고정하며 다음 불변 조건을 지킨다.
 
@@ -169,7 +184,7 @@ public interface ISceneEditCommand
 
 입력 중인 `-`, 빈 문자열을 즉시 0으로 바꿔 사용자의 편집을 방해하지 않는다.
 
-선택 없음, stale actor, 유한하지 않은 값, 범위 초과와 Undo/Redo 충돌은 `ErrorLabel`에 한글로 표시하고 문서는 바꾸지 않는다. SpinBox는 범위 밖 텍스트를 일단 받아 controller가 X/Z ±1000·Y ±100 위반을 명시적으로 거부하게 하며, 자동 clamp된 값으로 preview나 commit을 시작하지 않는다. 유효 값으로 시작된 preview 도중 범위 오류가 생기면 guarded clear로 top/world preview만 취소한다. `PreviewChanged(null)`이 invalid SpinBox 값과 ErrorLabel을 committed 값으로 덮어쓰지 않으며, invalid 상태의 Apply/Enter도 preview를 다시 만들지 않는다. Undo/Redo 버튼은 활성 preview를 먼저 취소한다. 선택 유형별 Inspector 전환은 후속 기능이다.
+선택 없음, stale actor, 유한하지 않은 값, 범위 초과와 Undo/Redo 충돌은 `ErrorLabel`에 한글로 표시하고 문서는 바꾸지 않는다. Apply/Enter는 `NoChange`에 `적용할 실제 변환 변경이 없습니다.`, `Conflict`에 `선택한 배우의 변경이 오래되어 최신 문서 상태와 충돌했습니다.`를 표시한다. 확정 호출이 예외를 던져도 `CurrentRevision`이 증가했다면 문서 mutation과 history 전이는 완료된 것이므로 `변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다.`로 안내해 적용 실패로 잘못 표시하지 않는다. SpinBox는 범위 밖 텍스트를 일단 받아 controller가 X/Z ±1000·Y ±100 위반을 명시적으로 거부하게 하며, 자동 clamp된 값으로 preview나 commit을 시작하지 않는다. 유효 값으로 시작된 preview 도중 범위 오류가 생기면 guarded clear로 top/world preview만 취소한다. `PreviewChanged(null)`이 invalid SpinBox 값과 ErrorLabel을 committed 값으로 덮어쓰지 않으며, invalid 상태의 Apply/Enter도 preview를 다시 만들지 않는다. Undo/Redo 버튼은 활성 preview를 먼저 취소한다. 선택 유형별 Inspector 전환은 후속 기능이다.
 
 ## 기본 편집 런타임 통합 검사
 
@@ -182,8 +197,15 @@ public interface ISceneEditCommand
 5. Inspector X=2 valid preview가 world에 보인 뒤 X=1001을 입력하면 preview가 취소되고 X=1001/ErrorLabel은 보존되는지 확인한다. invalid Apply도 revision·history·키프레임·3D 상태를 바꾸거나 preview를 다시 만들면 안 된다.
 6. 유효값 복원과 no-op Apply 뒤 preview가 남지 않고 최종 committed projection count가 top/world 각 4인지 확인한다.
 7. 별도 임시 `Node3D`와 adapter에 sanitize 결과가 같은 actor 둘을 적용해 실제 child node 두 개의 이름이 distinct/stable인지 확인하고 임시 root만 해제한다.
+8. 별도 임시 문서·세션·surface에 회전 drag/release를 보내 preview Yaw가 명령 하나로 확정되는지 확인한다.
+9. 별도 임시 Inspector SpinBox의 `LineEdit.TextSubmitted`를 발생시켜 Enter 제출이 preview를 명령 하나로 확정하는지 확인한다.
+10. actor가 사라진 snapshot을 적용할 때 adapter가 소유한 actor root만 제거하고 `Actors` 아래의 외부 child를 보존하는지 확인한다.
 
-모든 assertion을 통과한 경우에만 `BASIC_EDITING_INTEGRATION_READY ...`와 최종 `BASIC_EDITING_READY ...` 표식을 순서대로 출력한다.
+모든 assertion을 통과한 경우에만 다음 통합 표식과 최종 `BASIC_EDITING_READY ...` 표식을 순서대로 출력한다.
+
+```text
+BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 stale_error_clear=1 inspector_apply_noop=1 collision_nodes=1 final_ui_clean=1 rotation_commit=1 enter_commit=1 removal_ownership=1
+```
 
 ## 재생 모드와 편집 모드
 

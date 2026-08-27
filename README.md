@@ -53,6 +53,7 @@ Godot 메인 장면을 실행하면 왼쪽 위 탑뷰, 오른쪽 위 3D 뷰, 아
 - 배우 앞쪽의 원형 방향 핸들을 끌면 위치를 보존한 채 Yaw를 회전한다. 0°는 +X(화면 오른쪽), 90°는 +Z(화면 아래쪽)다.
 - 드래그 중 변화는 탑뷰와 3D에 동시에 보이지만 문서와 Undo 기록에는 아직 저장되지 않는다. 마우스를 놓을 때 명령 하나로 확정되며 `Escape`는 미리보기를 취소한다.
 - Inspector의 X/Y/Z/Yaw 값을 바꾸면 같은 비영구 미리보기가 표시된다. `변환 적용` 버튼 또는 SpinBox의 Enter 제출로 한 번에 확정한다.
+- Apply/Enter 결과는 실제 변경 없음과 최신 문서 상태 충돌을 구분해 안내한다. 문서 변경은 저장됐지만 후속 알림 처리에서 예외가 나면 적용 실패로 오해하지 않도록 저장 완료와 알림 실패를 함께 알린다.
 - `실행 취소`와 `다시 실행` 버튼은 활성 미리보기를 먼저 취소한 뒤 확정된 변환 명령을 되돌리거나 다시 적용한다.
 - X/Z ±1000, Y ±100 범위 밖 숫자는 입력칸에서 먼저 받아 오류를 설명하지만 preview나 문서 변경을 시작하지 않는다. 이미 유효한 숫자로 preview 중이었다면 범위 오류 순간 두 뷰를 committed 상태로 복원하되 잘못 입력한 값과 ErrorLabel은 보존한다. 범위를 바로 clamp해 잘못된 입력을 정상값처럼 확정하지 않는다.
 - 3D 뷰는 actor ID별 기본 Capsule/Box 플레이스홀더를 재사용하고 로컬 +X 방향 표식을 표시한다. 실제 게임 모델이나 애니메이션이 없어도 편집 흐름을 확인할 수 있다.
@@ -88,7 +89,7 @@ BASIC_EDITING_READY revision=4 selected=runtime-actor moved=1 undo=1 redo=1 top=
 이 표식 전에는 탑뷰 회전 preview와 Escape 복원, 3px 이상 body drag 확정, 실제 Undo/Redo 버튼, Inspector 범위 거부와 no-op Apply를 통과해야만 출력되는 다음 통합 표식이 있어야 한다.
 
 ```text
-BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 inspector_apply_noop=1 collision_nodes=1
+BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 stale_error_clear=1 inspector_apply_noop=1 collision_nodes=1 final_ui_clean=1 rotation_commit=1 enter_commit=1 removal_ownership=1
 ```
 
 ## 기준 좌표와 뒤잡 규칙
@@ -115,8 +116,8 @@ D:\3D-render
 ├─ AGENTS.md                 작업·검증·커밋·정상 버전 태그 규칙
 ├─ README.md                 프로젝트 입문 문서
 ├─ docs\                     설계, 운영, 조사, 구현 계획
-├─ src\                      애플리케이션 코드(후속 단계)
-├─ tests\                    자동화 테스트(후속 단계)
+├─ src\                      실행 가능한 애플리케이션 코드
+├─ tests\                    Domain·Application·Infrastructure·Editor 자동화 테스트
 ├─ local-assets\             로컬 게임 자산과 추출 결과, Git 제외
 ├─ tools\                    Godot/FFmpeg/자산 도구, Git 제외
 ├─ cache\                    재생성 가능한 캐시, Git 제외

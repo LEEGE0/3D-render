@@ -26,6 +26,8 @@ public sealed class DocumentSession
 
     public bool CanRedo => _redoStack.Count > 0;
 
+    public long CurrentRevision => _document.Revision;
+
     public IReadOnlyList<ActorDisplayInfo> ActorDisplayInfos => Array.AsReadOnly(
         _document.Actors
             .Select(actor => new ActorDisplayInfo(actor.ActorId, actor.DisplayName, actor.Role))
@@ -127,7 +129,7 @@ public sealed class DocumentSession
 
         var command = _redoStack.Peek();
         var revisionBefore = _document.Revision;
-        if (!TryExecute(command, revisionBefore, () => MoveRedoToUndo(command)))
+        if (TryExecuteDetailed(command, revisionBefore, () => MoveRedoToUndo(command)) != SceneEditResult.Applied)
         {
             return false;
         }
@@ -160,17 +162,19 @@ public sealed class DocumentSession
         PreviewChanged?.Invoke(this, new TransformPreviewChangedEventArgs(_preview));
     }
 
-    public bool CommitPreview()
+    public bool CommitPreview() => CommitPreviewDetailed() == SceneEditResult.Applied;
+
+    public SceneEditResult CommitPreviewDetailed()
     {
         if (_previewStart is null || _preview is null)
         {
-            return false;
+            return SceneEditResult.NoChange;
         }
 
         var before = _previewStart;
         var preview = _preview;
         ClearPreview();
-        return ExecuteCommand(new ReplaceTransformCommand(
+        return ExecuteCommandDetailed(new ReplaceTransformCommand(
             SelectedActorId!,
             before,
             new TransformKeyframe(before.Id, before.TimeSeconds, preview.Position, preview.YawDegrees)));
@@ -178,17 +182,21 @@ public sealed class DocumentSession
 
     public void CancelPreview() => ClearPreview();
 
-    internal bool ExecuteCommand(ISceneEditCommand command)
+    internal bool ExecuteCommand(ISceneEditCommand command) =>
+        ExecuteCommandDetailed(command) == SceneEditResult.Applied;
+
+    internal SceneEditResult ExecuteCommandDetailed(ISceneEditCommand command)
     {
         ArgumentNullException.ThrowIfNull(command);
         var revisionBefore = _document.Revision;
-        if (!TryExecute(command, revisionBefore, () => CommitExecute(command)))
+        var result = TryExecuteDetailed(command, revisionBefore, () => CommitExecute(command));
+        if (result != SceneEditResult.Applied)
         {
-            return false;
+            return result;
         }
 
         CommitExecute(command);
-        return true;
+        return SceneEditResult.Applied;
     }
 
     private bool ExecuteSelectedTransform(TransformKeyframe before, Position3 position, double yawDegrees) =>
@@ -197,11 +205,16 @@ public sealed class DocumentSession
             before,
             new TransformKeyframe(before.Id, before.TimeSeconds, position, yawDegrees)));
 
-    private bool TryExecute(ISceneEditCommand command, long revisionBefore, Action onMutationException)
+    private SceneEditResult TryExecuteDetailed(
+        ISceneEditCommand command,
+        long revisionBefore,
+        Action onMutationException)
     {
         try
         {
-            return command.Execute(_document);
+            return command.Execute(_document)
+                ? SceneEditResult.Applied
+                : SceneEditResult.NoChange;
         }
         catch (Exception exception) when (_document.Revision > revisionBefore)
         {
@@ -210,11 +223,11 @@ public sealed class DocumentSession
         }
         catch (ArgumentException)
         {
-            return false;
+            return SceneEditResult.Conflict;
         }
         catch (InvalidOperationException)
         {
-            return false;
+            return SceneEditResult.Conflict;
         }
     }
 

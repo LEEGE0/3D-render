@@ -195,15 +195,34 @@ public sealed class TransformInspectorController : IDisposable
             }
 
             _session.UpdatePreview(position, NormalizeYaw(yawDegrees));
-            var changed = _session.CommitPreview();
-            _hasActivePreview = false;
-            if (!changed)
+            var revisionBeforeCommit = _session.CurrentRevision;
+            SceneEditResult result;
+            try
             {
-                ShowError("적용할 실제 변환 변경이 없습니다.");
+                result = _session.CommitPreviewDetailed();
             }
-            else
+            catch (Exception exception) when (_session.CurrentRevision > revisionBeforeCommit)
             {
-                ClearError();
+                _hasActivePreview = false;
+                RefreshCommittedValues();
+                ShowError($"변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다: {exception.Message}");
+                return;
+            }
+
+            _hasActivePreview = false;
+            switch (result)
+            {
+                case SceneEditResult.Applied:
+                    ClearError();
+                    break;
+                case SceneEditResult.NoChange:
+                    ShowError("적용할 실제 변환 변경이 없습니다.");
+                    break;
+                case SceneEditResult.Conflict:
+                    ShowError("선택한 배우의 변경이 오래되어 최신 문서 상태와 충돌했습니다.");
+                    break;
+                default:
+                    throw new InvalidOperationException($"알 수 없는 편집 결과입니다: {result}");
             }
         }
         catch (ArgumentException exception)

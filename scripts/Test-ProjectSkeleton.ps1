@@ -34,6 +34,7 @@ $requiredFiles = @(
     (Join-Path $applicationRoot 'Sessions\SelectionChangedEventArgs.cs'),
     (Join-Path $applicationRoot 'Editing\TransformPreview.cs'),
     (Join-Path $applicationRoot 'Editing\TransformPreviewChangedEventArgs.cs'),
+    (Join-Path $applicationRoot 'Editing\SceneEditResult.cs'),
     (Join-Path $applicationRoot 'Commands\ISceneEditCommand.cs'),
     (Join-Path $applicationRoot 'Commands\ReplaceTransformCommand.cs'),
     (Join-Path $applicationRoot 'Projection\ISceneProjectionConsumer.cs'),

@@ -259,6 +259,8 @@ public partial class Main : Control
         Require(document.Revision == revisionBeforeInvalidInput, "Inspector no-op Apply가 문서 revision을 변경했습니다.");
         Require(document.GetTransformKeyframe("runtime-actor", "runtime-origin").Position == finalTransform.Position,
             "Inspector no-op Apply가 committed 변환을 변경했습니다.");
+        Require(errorLabel.Text.Contains("실제 변환 변경", StringComparison.Ordinal),
+            "Inspector no-op Apply가 실제 변경 없음 메시지를 표시하지 않았습니다.");
         Require(!undoButton.Disabled && redoButton.Disabled,
             "Inspector 거부/no-op 뒤 history 버튼 상태가 바뀌었습니다.");
         Require(topViewSurface.ApplyCount == 4 && worldAdapter.ApplyCount == 4,
@@ -273,6 +275,8 @@ public partial class Main : Control
             "최종 UI 정리 preview가 3D에 반영되지 않았습니다.");
         topViewSurface._GuiInput(new InputEventKey { Keycode = Key.Escape, Pressed = true });
 
+        VerifyTemporaryRotationCommit(topViewSurface);
+        VerifyTemporaryInspectorPaths(topViewSurface);
         VerifyCollidingActorNodes(actorsRoot);
 
         Require(string.IsNullOrWhiteSpace(errorLabel.Text),
@@ -294,7 +298,8 @@ public partial class Main : Control
         GD.Print(
             "BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 " +
             "undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 " +
-            "stale_error_clear=1 inspector_apply_noop=1 collision_nodes=1 final_ui_clean=1");
+            "stale_error_clear=1 inspector_apply_noop=1 collision_nodes=1 final_ui_clean=1 " +
+            "rotation_commit=1 enter_commit=1 removal_ownership=1");
     }
 
     private static void RequirePreviewInactive(DocumentSession session)
@@ -323,6 +328,8 @@ public partial class Main : Control
         actorsRoot.AddChild(temporaryRoot);
         try
         {
+            var foreignChild = new Node3D { Name = "ForeignChild" };
+            temporaryRoot.AddChild(foreignChild);
             var adapter = new WorldViewProjectionAdapter(temporaryRoot);
             var snapshot = new SceneSnapshot(
                 "collision-runtime",
@@ -337,11 +344,13 @@ public partial class Main : Control
             adapter.Apply(snapshot);
             var firstNames = temporaryRoot.GetChildren()
                 .Select(child => child.Name.ToString())
+                .Where(name => name.StartsWith("Actor_", StringComparison.Ordinal))
                 .OrderBy(name => name, StringComparer.Ordinal)
                 .ToArray();
             adapter.Apply(snapshot);
             var secondNames = temporaryRoot.GetChildren()
                 .Select(child => child.Name.ToString())
+                .Where(name => name.StartsWith("Actor_", StringComparison.Ordinal))
                 .OrderBy(name => name, StringComparer.Ordinal)
                 .ToArray();
 
@@ -353,12 +362,194 @@ public partial class Main : Control
             Require(firstNames.Contains("Actor_a_b", StringComparer.Ordinal) &&
                     firstNames.Contains("Actor_a_b__0061_002D_0062", StringComparer.Ordinal),
                 "collision node 이름이 exact base와 결정적 suffix 계약을 지키지 않았습니다.");
+
+            adapter.Apply(new SceneSnapshot(
+                "collision-runtime",
+                revision: 1,
+                timeSeconds: 0,
+                new Dictionary<string, EvaluatedTransform>(StringComparer.Ordinal)));
+            Require(adapter.ActorCount == 0, "empty snapshot 뒤 adapter actor dictionary가 비워지지 않았습니다.");
+            Require(ReferenceEquals(foreignChild.GetParent(), temporaryRoot) && !foreignChild.IsQueuedForDeletion(),
+                "adapter가 소유하지 않은 foreign child를 제거했습니다.");
         }
         finally
         {
             temporaryRoot.QueueFree();
         }
     }
+
+    private static void VerifyTemporaryRotationCommit(Control temporaryParent)
+    {
+        var document = CreateTemporaryDocument("rotation-commit-runtime", "rotation-actor");
+        var session = new DocumentSession(document);
+        var historyEvents = 0;
+        session.HistoryChanged += (_, _) => historyEvents++;
+        var surface = new TopViewSurface
+        {
+            Name = "RotationCommitSurface",
+            Visible = false,
+            Size = new Vector2(400, 400),
+        };
+        temporaryParent.AddChild(surface);
+        try
+        {
+            surface.Initialize(session);
+            surface.Apply(document.CreateSnapshot(0));
+            var mapper = new TopViewCoordinateMapper(400, 400, 0, 0, 40);
+            var center = mapper.WorldToScreen(new Position3(0, 0, 0));
+            SendLeftButton(surface, center, pressed: true);
+            SendLeftButton(surface, center, pressed: false);
+            var handle = mapper.RotationHandlePosition(center, 0);
+            var rotatedPointer = new ScreenPoint(center.X, center.Y + 28);
+            SendLeftButton(surface, handle, pressed: true);
+            SendLeftMotion(surface, rotatedPointer, leftButtonPressed: true);
+            SendLeftButton(surface, rotatedPointer, pressed: false);
+
+            var committed = document.GetTransformKeyframe("rotation-actor", "rotation-actor-origin");
+            Require(document.Revision == 1 && historyEvents == 1,
+                "임시 TopView 회전 release가 revision/history를 한 번 확정하지 않았습니다.");
+            Require(IsNear(committed.YawDegrees, 90) && session.CanUndo && !session.CanRedo,
+                "임시 TopView 회전 release가 90도 yaw/history를 저장하지 않았습니다.");
+        }
+        finally
+        {
+            surface.DetachSession();
+            surface.QueueFree();
+        }
+    }
+
+    private static void VerifyTemporaryInspectorPaths(Control temporaryParent)
+    {
+        using (var harness = new TemporaryInspectorHarness(temporaryParent, "enter-commit-runtime", "enter-actor"))
+        {
+            var historyEvents = 0;
+            harness.Session.HistoryChanged += (_, _) => historyEvents++;
+            harness.XInput.Value = 3;
+            harness.XInput.GetLineEdit().EmitSignal(LineEdit.SignalName.TextSubmitted, "3");
+
+            var committed = harness.Document.GetTransformKeyframe("enter-actor", "enter-actor-origin");
+            Require(harness.Document.Revision == 1 && historyEvents == 1,
+                "Inspector LineEdit Enter가 revision/history를 한 번 확정하지 않았습니다.");
+            Require(committed.Position == new Position3(3, 0, 0) &&
+                    harness.Session.CanUndo && !harness.Session.CanRedo,
+                "Inspector LineEdit Enter가 입력 변환/history를 저장하지 않았습니다.");
+        }
+
+        using (var harness = new TemporaryInspectorHarness(temporaryParent, "stale-runtime", "stale-actor"))
+        {
+            harness.XInput.Value = 3;
+            var original = harness.Document.GetTransformKeyframe("stale-actor", "stale-actor-origin");
+            var external = new TransformKeyframe(
+                original.Id,
+                original.TimeSeconds,
+                new Position3(2, 0, 0),
+                original.YawDegrees);
+            Require(harness.Document.ReplaceTransformKeyframe("stale-actor", original, external),
+                "stale Inspector probe의 외부 변경을 만들지 못했습니다.");
+            harness.ApplyButton.EmitSignal(Button.SignalName.Pressed);
+
+            Require(harness.Document.Revision == 1 &&
+                    harness.Document.GetTransformKeyframe("stale-actor", "stale-actor-origin") == external,
+                "stale Inspector commit이 외부 committed 상태를 변경했습니다.");
+            Require(!harness.Session.CanUndo && !harness.Session.CanRedo,
+                "stale Inspector commit이 history를 만들었습니다.");
+            Require(harness.ErrorLabel.Text.Contains("오래", StringComparison.Ordinal),
+                "stale Inspector commit이 오래된 변경 메시지를 표시하지 않았습니다.");
+        }
+
+        using (var harness = new TemporaryInspectorHarness(temporaryParent, "observer-runtime", "observer-actor"))
+        {
+            harness.XInput.Value = 4;
+            harness.Document.Changed += (_, _) => throw new RuntimeChangedObserverException();
+            harness.ApplyButton.EmitSignal(Button.SignalName.Pressed);
+
+            var committed = harness.Document.GetTransformKeyframe("observer-actor", "observer-actor-origin");
+            Require(harness.Document.Revision == 1 && committed.Position == new Position3(4, 0, 0),
+                "observer 예외 뒤 Inspector 변경이 committed 상태에 저장되지 않았습니다.");
+            Require(harness.Session.CanUndo && !harness.Session.CanRedo,
+                "observer 예외 뒤 Inspector history transition이 완료되지 않았습니다.");
+            Require(harness.ErrorLabel.Text.Contains("저장", StringComparison.Ordinal) &&
+                    harness.ErrorLabel.Text.Contains("알림", StringComparison.Ordinal),
+                "observer 예외 뒤 Inspector가 저장 완료/알림 실패 메시지를 표시하지 않았습니다.");
+        }
+    }
+
+    private static SceneDocument CreateTemporaryDocument(string documentId, string actorId) =>
+        SceneDocument.Create(
+            documentId,
+            documentId,
+            null,
+            10,
+            30,
+            [
+                new ActorTrack(
+                    actorId,
+                    actorId,
+                    "교육용 배우",
+                    [new TransformKeyframe($"{actorId}-origin", 0, new Position3(0, 0, 0), 0)],
+                    [],
+                    []),
+            ]);
+
+    private sealed class TemporaryInspectorHarness : IDisposable
+    {
+        private readonly Control _root;
+        private readonly TransformInspectorController _controller;
+
+        public TemporaryInspectorHarness(Control parent, string documentId, string actorId)
+        {
+            Document = CreateTemporaryDocument(documentId, actorId);
+            Session = new DocumentSession(Document);
+            _root = new Control { Name = $"InspectorHarness_{actorId}", Visible = false };
+            parent.AddChild(_root);
+            var selectedActorLabel = Add(new Label());
+            ErrorLabel = Add(new Label());
+            XInput = Add(new SpinBox());
+            var yInput = Add(new SpinBox());
+            var zInput = Add(new SpinBox());
+            var yawInput = Add(new SpinBox());
+            ApplyButton = Add(new Button());
+            var undoButton = Add(new Button());
+            var redoButton = Add(new Button());
+            _controller = new TransformInspectorController(
+                Session,
+                selectedActorLabel,
+                ErrorLabel,
+                XInput,
+                yInput,
+                zInput,
+                yawInput,
+                ApplyButton,
+                undoButton,
+                redoButton);
+            Session.SelectActor(actorId);
+        }
+
+        public SceneDocument Document { get; }
+
+        public DocumentSession Session { get; }
+
+        public Label ErrorLabel { get; }
+
+        public SpinBox XInput { get; }
+
+        public Button ApplyButton { get; }
+
+        public void Dispose()
+        {
+            _controller.Dispose();
+            Session.CancelPreview();
+            _root.QueueFree();
+        }
+
+        private T Add<T>(T control) where T : Control
+        {
+            _root.AddChild(control);
+            return control;
+        }
+    }
+
+    private sealed class RuntimeChangedObserverException : InvalidOperationException;
 
     private static void SendLeftButton(TopViewSurface surface, ScreenPoint position, bool pressed) =>
         surface._GuiInput(new InputEventMouseButton

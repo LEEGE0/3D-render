@@ -423,6 +423,7 @@
 
 **Files:**
 - Create: `src/PvpGuide.Application/Sessions/ActorDisplayInfo.cs`
+- Create: `src/PvpGuide.Application/Editing/SceneEditResult.cs`
 - Modify: `src/PvpGuide.Application/Sessions/DocumentSession.cs`
 - Modify: `tests/PvpGuide.Application.Tests/DocumentSessionTests.cs`
 - Create: `src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs`
@@ -493,6 +494,8 @@
 
   `TransformInspectorController`는 selection event와 committed/preview 값을 입력에 반영한다. X/Z 범위 ±1000, Y ±100, step 0.1, Yaw 입력은 확정 시 `[0,360)`로 정규화한다. SpinBox는 범위 밖 text/value를 받아 controller가 오류를 표시하고 preview/commit 전에 거부하게 한다. valid preview 뒤 invalid 값이 들어오면 guarded preview clear로 두 뷰를 committed 상태로 복원하되 invalid SpinBox 값과 ErrorLabel은 보존하며, invalid Apply/Enter는 preview를 다시 만들지 않는다. 내부 반영 중 `ValueChanged` 재진입을 막는 guard를 두고, 사용자 값 변경은 preview를 시작·갱신한다. Apply 버튼 또는 각 SpinBox 내부 LineEdit의 Enter 제출은 preview를 명령 하나로 확정한다. Undo/Redo는 활성 preview를 취소한 뒤 session 메서드를 호출한다. `DocumentSession.HistoryChanged`는 성공한 stack transition 뒤에만 발생하며 Inspector는 이 event에서 버튼 상태를 갱신한다. 선택 없음·stale actor·범위 오류는 ErrorLabel에 한글로 표시하고 문서를 바꾸지 않는다.
 
+  `DocumentSession.CommitPreviewDetailed()`은 공개 `SceneEditResult.Applied/NoChange/Conflict`를 반환하고 기존 bool `CommitPreview()`는 호환 wrapper로 유지한다. Inspector는 `CurrentRevision`을 확정 직전에 캡처해 no-op과 stale conflict를 구분하며, 예외 뒤 revision이 증가했다면 저장 완료와 표시 알림 실패를 함께 안내한다. Application 테스트는 no-op/충돌 분류와 mutation 후 원본 observer 예외·history transition을 고정한다.
+
 - [x] **Step 5: Main 조립과 exact runtime smoke를 구현한다**
 
   `_Ready()` 순서를 고정한다.
@@ -504,11 +507,13 @@
   5. 기존 marker `PROJECTION_SYNC_READY revision=1 top=1 world=1`을 출력한다.
   6. actor root/VisualRoot/OverlayRoot와 committed transform을 확인한다.
   7. 실제 `_GuiInput` 회전 preview와 Escape 복원, body drag/release 이동 확정, Undo/Redo button signal, Inspector valid preview→X=1001 취소·invalid Apply·no-op Apply를 실행해 revision 4와 top/world count 4를 만든다.
-  8. 별도 임시 Node3D/adapter/synthetic snapshot으로 sanitize collision actor 두 개의 실제 child 이름이 distinct/stable인지 확인하고 임시 root만 해제한다.
-  9. 통합 assertion 성공 marker 뒤 다음 exact marker를 출력한다.
+  8. 별도 임시 문서·세션·surface에 실제 회전 drag/release를 보내 Yaw 명령 하나가 확정되는지 검증하고 임시 노드를 정리한다.
+  9. 별도 임시 Inspector의 SpinBox 내부 `LineEdit.TextSubmitted`를 발생시켜 미리보기 변환이 명령 하나로 확정되는지 검증한다.
+  10. 별도 임시 Node3D/adapter/synthetic snapshot으로 sanitize collision actor 두 개의 실제 child 이름이 distinct/stable인지 확인한다. 다음 snapshot에서 actor를 제거했을 때 adapter 소유 root만 해제되고 같은 `Actors` 아래의 외부 child는 보존되는지도 확인한 뒤 임시 root를 정리한다.
+  11. 통합 assertion 성공 marker 뒤 다음 exact marker를 출력한다.
 
   ```text
-  BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 inspector_apply_noop=1 collision_nodes=1
+  BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 stale_error_clear=1 inspector_apply_noop=1 collision_nodes=1 final_ui_clean=1 rotation_commit=1 enter_commit=1 removal_ownership=1
   ```
 
   ```text
@@ -548,7 +553,7 @@
   spec reviewer는 좌표·first-key 정책·preview 비영구성·Undo/Redo·exact marker·게임패드 제외를 확인하고, quality reviewer는 Godot lifecycle, event dispose, node ownership, stale preview, 테스트 결함 탐지력을 확인한다. 모든 Critical/Important 수정과 fresh 재리뷰 후 Task 4 경로만 정확히 스테이징한다.
 
   ```powershell
-  git add -- 'src/PvpGuide.Application/Sessions/ActorDisplayInfo.cs' 'src/PvpGuide.Application/Sessions/DocumentSession.cs' 'tests/PvpGuide.Application.Tests/DocumentSessionTests.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs.uid' 'src/PvpGuide.Editor/Features/TopView/TopViewCoordinateMapper.cs.uid' 'src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs' 'src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs.uid' 'src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs' 'src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs.uid' 'src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs' 'src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs.uid' 'src/PvpGuide.Editor/Scenes/Main/Main.tscn' 'src/PvpGuide.Editor/Scenes/Main/Main.cs' 'tests/PvpGuide.Editor.Tests/WorldTransformMapperTests.cs' 'scripts/Test-ProjectSkeleton.ps1' 'scripts/Test-GodotRuntime.ps1' 'README.md' 'docs/05-editor-architecture.md' 'docs/13-roadmap.md' 'docs/superpowers/plans/2026-08-27-basic-topview-editing.md'
+  git add -- 'src/PvpGuide.Application/Sessions/ActorDisplayInfo.cs' 'src/PvpGuide.Application/Editing/SceneEditResult.cs' 'src/PvpGuide.Application/Sessions/DocumentSession.cs' 'tests/PvpGuide.Application.Tests/DocumentSessionTests.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs.uid' 'src/PvpGuide.Editor/Features/TopView/TopViewCoordinateMapper.cs.uid' 'src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs' 'src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs.uid' 'src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs' 'src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs.uid' 'src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs' 'src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs.uid' 'src/PvpGuide.Editor/Scenes/Main/Main.tscn' 'src/PvpGuide.Editor/Scenes/Main/Main.cs' 'tests/PvpGuide.Editor.Tests/WorldTransformMapperTests.cs' 'scripts/Test-ProjectSkeleton.ps1' 'scripts/Test-GodotRuntime.ps1' 'README.md' 'docs/05-editor-architecture.md' 'docs/13-roadmap.md' 'docs/superpowers/plans/2026-08-27-basic-topview-editing.md'
   git commit -m 'feat: 탑뷰 편집과 3D 플레이스홀더 연결'
   git push
   ```

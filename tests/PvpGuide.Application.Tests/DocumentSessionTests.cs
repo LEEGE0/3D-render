@@ -408,6 +408,70 @@ public sealed class DocumentSessionTests
     }
 
     [Fact]
+    public void Detailed_preview_commit_classifies_normalized_same_transform_as_no_change()
+    {
+        var session = CreateSession(out var document);
+        session.SelectActor("host");
+        var current = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        session.BeginPreview();
+        session.UpdatePreview(current.Position, current.YawDegrees + 360);
+
+        var result = session.CommitPreviewDetailed();
+
+        Assert.Equal(SceneEditResult.NoChange, result);
+        Assert.Equal(0, session.CurrentRevision);
+        Assert.Equal(0, document.Revision);
+        Assert.False(session.CanUndo);
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void Detailed_preview_commit_classifies_stale_preimage_as_conflict_without_history()
+    {
+        var session = CreateSession(out var document);
+        session.SelectActor("host");
+        var original = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(8, 2, 9), 90);
+        var external = new TransformKeyframe(
+            original.Id,
+            original.TimeSeconds,
+            new Position3(4, 2, 6),
+            original.YawDegrees);
+        Assert.True(document.ReplaceTransformKeyframe("host", original, external));
+
+        var result = session.CommitPreviewDetailed();
+
+        Assert.Equal(SceneEditResult.Conflict, result);
+        Assert.Equal(1, session.CurrentRevision);
+        Assert.Equal(external, session.GetSelectedTransform());
+        Assert.False(session.CanUndo);
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void Detailed_preview_commit_rethrows_original_observer_exception_after_history_transition()
+    {
+        var session = CreateSession(out var document);
+        var historyStates = new List<(bool CanUndo, bool CanRedo)>();
+        session.HistoryChanged += (_, _) => historyStates.Add((session.CanUndo, session.CanRedo));
+        session.SelectActor("host");
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(8, 2, 9), 90);
+        document.Changed += (_, _) => throw new ChangedObserverException();
+
+        Assert.Throws<ChangedObserverException>(() => session.CommitPreviewDetailed());
+
+        Assert.Equal(1, session.CurrentRevision);
+        var committed = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        Assert.Equal(new Position3(8, 2, 9), committed.Position);
+        Assert.Equal(90, committed.YawDegrees);
+        Assert.Equal([(true, false)], historyStates);
+        Assert.True(session.CanUndo);
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
     public void Selection_change_clears_preview_before_raising_selection_and_same_selection_is_silent()
     {
         var session = CreateSession(out _);
