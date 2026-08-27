@@ -1,0 +1,22 @@
+# 로컬 게임 자산과 추출 결과물은 저작권 및 용량 문제로 Git에 포함하지 않는다.
+local-assets/
+
+# D 드라이브에 설치하는 외부 실행 도구와 엔진은 버전 관리하지 않는다.
+tools/
+
+# 생성 가능한 캐시와 렌더링 출력물
+cache/
+exports/
+
+# Godot / .NET 생성 파일
+.godot/
+.mono/
+bin/
+obj/
+
+# Windows / IDE 임시 파일
+Thumbs.db
+.vs/
+.vscode/
+*.user
+*.suo
