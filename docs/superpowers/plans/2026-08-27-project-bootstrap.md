@@ -191,32 +191,54 @@
 ### Task 5: 저장·가이드 가져오기·렌더링 기반
 
 **Files:**
+- Modify: `src/PvpGuide.Domain/SceneDocument.cs`
+- Modify: `src/PvpGuide.Domain/Actors/ActorTrack.cs`
+- Create: `src/PvpGuide.Domain/Timeline/ActionKeyframe.cs`
+- Create: `src/PvpGuide.Domain/Timeline/LockOnKeyframe.cs`
+- Create: `src/PvpGuide.Infrastructure/PvpGuide.Infrastructure.csproj`
+- Create: `src/PvpGuide.Infrastructure/Properties/AssemblyInfo.cs`
 - Create: `src/PvpGuide.Infrastructure/Serialization/SceneDocumentSerializer.cs`
 - Create: `src/PvpGuide.Infrastructure/Import/TopviewGuideV1Importer.cs`
 - Create: `src/PvpGuide.Editor/Features/Rendering/RenderQueue.cs`
-- Test: `tests/PvpGuide.Infrastructure.Tests/TopviewGuideV1ImporterTests.cs`
-- Test: `tests/PvpGuide.Infrastructure.Tests/SceneRoundTripTests.cs`
+- Create: `src/PvpGuide.Editor/Features/Rendering/RenderQueue.cs.uid`
+- Create: `samples/guides/synthetic-topview-v1.scene.json`
+- Create: `tests/PvpGuide.Infrastructure.Tests/PvpGuide.Infrastructure.Tests.csproj`
+- Create: `tests/PvpGuide.Infrastructure.Tests/TopviewGuideV1ImporterTests.cs`
+- Create: `tests/PvpGuide.Infrastructure.Tests/SceneRoundTripTests.cs`
+- Create: `tests/PvpGuide.Editor.Tests/RenderQueueTests.cs`
+- Modify: 구조 검사·README·계획 문서
 
 **Interfaces:**
 - Consumes: `gangqueen-topview-guide-v1` JSON과 `SceneDocument`
 - Produces: 버전형 JSON 저장, 원자적 저장, 가이드 가져오기, 프레임 렌더 작업 큐
 
-- [ ] **Step 1: 실제 가이드 고정 샘플로 가져오기 실패 테스트를 작성한다**
+- [x] **Step 1: 합성 V1 fixture와 importer RED 테스트를 고정한다**
 
-  네 캐릭터 역할, 좌표, 방향각, 키프레임과 잠금 대상이 보존되는지 검사한다.
+  `samples/guides/synthetic-topview-v1.scene.json`을 저작권 없는 합성 입력으로 작성하고 `format`, `coordinate_system`, `backstab_rules`, `scene`, `evaluations` 및 알 수 없는 원본 필드를 포함한다. importer 테스트는 네 역할(`host`, `invader`, `phantom1`, `phantom2`), keyframe ID `10/20/30`, t=`0.25/0.9/1.4`, 첫 frame의 guide 좌표/yaw와 origin `(100,200)`·scale `0.1`·ground `0`·FPS `30` 변환 결과 `(0,0,0)`, `(1,0,0)`, `(-2,0,2)`, `(3,0,2)`를 단언한다. scene name/note, displayName/role, actions, lock_on/target, duration `1.4`, phantom1의 disabled target 보존, phantom2의 attack/idle 키를 확인하고 `current_index`는 문서에 들어가지 않는 선택 힌트로 검증한다. 잘못된 format·좌표 선언·중복 actor/time은 실패하고 지원 한계 warning과 raw metadata는 보존되는지 검사한다. 먼저 테스트를 실행해 실제 RED를 기록한다.
 
-- [ ] **Step 2: 저장 왕복 실패 테스트를 작성한다**
+- [x] **Step 2: 저장 왕복·원자 저장 실패 테스트를 작성한다**
 
-  저장 후 다시 연 문서가 ID, 시간축, 배우·키프레임·효과 데이터를 잃지 않는지 검사한다.
+  `SceneRoundTripTests.cs`에서 `SceneDocument`의 ID/name/note/duration/FPS/actors/Transform·Action·LockOn 트랙과 ImportMetadata가 roundtrip 후 동일하고 revision 0인지 검사한다. serializer는 System.Text.Json 내부 DTO, camelCase, indented UTF-8, strict numbers, unknown member disallow, 정확한 `pvp-guide-scene/1` 스키마를 사용하며 revision/event/current time과 선택·UI·Godot 상태는 저장하지 않는다. `SaveAtomicAsync` 테스트는 destination 절대 경로·`.pvpscene.json`·존재하는 부모, `D:\3D-render\cache\tests\<guid>` exact root, 같은 디렉터리 CreateNew temp·flush·재 Deserialize·`File.Move(..., true)`를 검사한다. 실패/취소 시 기존 destination byte 보존과 temp best-effort 삭제, move 실패 시 검증된 temp 보존, 성공 시 temp 부재를 단언한다.
 
-- [ ] **Step 3: 최소 가져오기와 직렬화를 구현한다**
+- [x] **Step 3: Domain 확장과 최소 importer/serializer를 구현한다**
 
-  임시 파일 쓰기 → 검증 → 원자적 교체를 사용하고 스키마 버전을 검사한다.
+  `SceneDocument`/`ActorTrack`에 방어 복사와 시간순 목록을 확장하고 `ActionKeyframe`의 비어 있지 않은 ID/actionKey, 유한·0 이상 시간·동일 Action 시간 중복 검증을 구현한다. `LockOnKeyframe`은 ID·시간·Enabled·nullable TargetActorId를 검증하고 disabled target 후보를 보존하며 enabled이면 target 필수, 다른 존재 배우만 허용한다. 모든 트랙 시간은 문서 범위 안이어야 한다. importer는 guide x→world X, guide y→world Z, world Y=ground로 변환하고 duration을 max time으로 정하며 metadata/raw payload와 warning을 반환한다. serializer는 버전 확인과 위 원자 저장 계약을 구현한다.
 
-- [ ] **Step 4: Godot Movie Maker와 FFmpeg 인계 구조를 구현한다**
+- [x] **Step 4: RenderQueue와 Godot/FFmpeg 인계 구조를 구현한다**
 
-  렌더 큐는 프레임 출력 위치, 해상도, FPS, 시작·종료 시간과 FFmpeg 인코딩 명령을 명시적으로 보관한다.
+  `RenderJob`은 Guid ID, document ID/revision, `D:\3D-render` 하위 output, width/height/FPS, decimal start/end를 검증한다. `[start,end)`에 대해 `FrameCount=ceil((end-start)*fps)`, `GetTimeSeconds(n)=start+n/fps`를 사용하고 누적 덧셈을 금지한다. 기본 `frame_%06d.png`, start number 1, FFmpeg `.exe` 절대 경로와 defensive-copied argument array(`-n` 포함)를 보관하며 셸 문자열/수동 quoting과 Godot/Process 호출은 금지한다. GetFullPath+GetRelativePath containment로 root 자체·상대경로·`..`·`D:\3D-render-other`를 거부하고, lock 기반 FIFO `Snapshot`/`Count`/`TryPeek`/`TryDequeue` 및 dequeue 후 ID 재사용 거부를 테스트한다.
 
-- [ ] **Step 5: 전체 테스트를 검증하고 커밋·푸시한다**
+- [x] **Step 5: 정확한 전체 검증을 실행하고 결과를 기록한다**
 
-  Expected: 가져오기·왕복·렌더 작업 검증 테스트 실패 0개.
+  저장소 루트(`D:\3D-render`)에서 다음 명령을 순서대로 실행한다.
+
+  ```powershell
+  $env:NUGET_PACKAGES='D:\3D-render\tools\nuget-packages'
+  dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo
+  dotnet test .\tests\PvpGuide.Infrastructure.Tests\PvpGuide.Infrastructure.Tests.csproj -c Debug --nologo
+  dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo
+  & .\scripts\Test-ProjectSkeleton.ps1
+  & .\scripts\Test-GodotRuntime.ps1
+  ```
+
+  세 테스트 프로젝트와 두 스크립트 모두 종료 코드 0, importer/roundtrip/atomic save/RenderQueue 실패 0개여야 한다. 실제 FFmpeg/Godot Movie Maker 프로세스는 실행하지 않는다. 최종 변경은 Task 5 파일 목록과 README·계획 문서만 명시적으로 스테이징하며, 커밋·푸시는 메인 에이전트가 수행한다.

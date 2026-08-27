@@ -1,0 +1,60 @@
+{
+  "format": "gangqueen-topview-guide-v1",
+  "coordinate_system": {
+    "x_axis": "right",
+    "y_axis": "down",
+    "yaw_zero": "right",
+    "yaw_direction": "clockwise"
+  },
+  "backstab_rules": {
+    "rear_arc_degrees": 96,
+    "cast_length_pixels": 24,
+    "minimum_inside_ratio": 0.55,
+    "requires_contact": true
+  },
+  "scene": {
+    "id": "synthetic-four-role-drill",
+    "name": "Synthetic Four Role Drill",
+    "note": "Copyright-free importer fixture with invented coordinates.",
+    "current_index": 1,
+    "keyframes": [
+      {
+        "id": "10",
+        "time": 0.25,
+        "actors": [
+          { "id": "host", "display_name": "Host Alpha", "role": "host", "x": 100, "y": 200, "yaw": 359, "action": "idle", "lock_on": true, "lock_target": "invader" },
+          { "id": "invader", "display_name": "Invader Beta", "role": "invader", "x": 110, "y": 200, "yaw": 1, "action": "approach", "lock_on": true, "lock_target": "host" },
+          { "id": "phantom1", "display_name": "Phantom Gamma", "role": "phantom1", "x": 80, "y": 220, "yaw": 180, "action": "observe", "lock_on": false, "lock_target": "invader" },
+          { "id": "phantom2", "display_name": "Phantom Delta", "role": "phantom2", "x": 130, "y": 220, "yaw": 270, "action": "approach", "lock_on": true, "lock_target": "invader" }
+        ]
+      },
+      {
+        "id": "20",
+        "time": 0.9,
+        "actors": [
+          { "id": "host", "display_name": "Host Alpha", "role": "host", "x": 102, "y": 201, "yaw": 5, "action": "guard", "lock_on": true, "lock_target": "invader" },
+          { "id": "invader", "display_name": "Invader Beta", "role": "invader", "x": 106, "y": 201, "yaw": 181, "action": "attack", "lock_on": true, "lock_target": "host" },
+          { "id": "phantom1", "display_name": "Phantom Gamma", "role": "phantom1", "x": 78, "y": 224, "yaw": 180, "action": "retreat", "lock_on": false, "lock_target": "invader" },
+          { "id": "phantom2", "display_name": "Phantom Delta", "role": "phantom2", "x": 126, "y": 216, "yaw": 225, "action": "attack", "lock_on": true, "lock_target": "invader" }
+        ]
+      },
+      {
+        "id": "30",
+        "time": 1.4,
+        "actors": [
+          { "id": "host", "display_name": "Host Alpha", "role": "host", "x": 104, "y": 202, "yaw": 10, "action": "idle", "lock_on": true, "lock_target": "invader" },
+          { "id": "invader", "display_name": "Invader Beta", "role": "invader", "x": 105, "y": 202, "yaw": 185, "action": "idle", "lock_on": true, "lock_target": "host" },
+          { "id": "phantom1", "display_name": "Phantom Gamma", "role": "phantom1", "x": 76, "y": 228, "yaw": 175, "action": "idle", "lock_on": false, "lock_target": "invader" },
+          { "id": "phantom2", "display_name": "Phantom Delta", "role": "phantom2", "x": 124, "y": 214, "yaw": 210, "action": "idle", "lock_on": false, "lock_target": "invader" }
+        ]
+      }
+    ]
+  },
+  "evaluations": [
+    { "time": 0.9, "label": "invented pressure window", "score": 0.42 }
+  ],
+  "synthetic_extension": {
+    "fixture_owner": "PvpGuide tests",
+    "meaning": "unknown root members must survive as raw source"
+  }
+}

@@ -2,7 +2,7 @@
 
 Windows 11에서 오프라인으로 실행되는 DARK SOULS REMASTERED PvP 상황 재현·교육 영상 제작 프로그램이다. 일반적인 3D 제작 도구보다 전투 참여자의 위치, 방향, 거리, 타이밍, 락온, 공격과 뒤잡 관계를 빠르고 정확하게 설명하는 데 초점을 둔다.
 
-현재 저장소는 아키텍처·데이터 계약·개발 정책을 확정하고 실제 게임 애니메이션 자산의 존재와 변환 가능성을 조사한 기반 단계다. 애플리케이션 코드는 후속 마일스톤에서 Godot 프로젝트 골격부터 추가한다.
+현재 저장소에는 실행 가능한 Godot 프로젝트 골격, `SceneDocument` 기반 동시 뷰 동기화, 버전형 저장·가이드 가져오기·렌더 큐 기반이 구현되어 있다. 실제 게임 자산 가져오기와 완성된 편집 UI·최종 렌더 파이프라인은 후속 마일스톤에서 다룬다.
 
 ## 핵심 목표
 
@@ -129,6 +129,29 @@ dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug 
 ```
 
 Domain·Editor 테스트 실패 0, 구조 검사 PASS, `PROJECT_RUNTIME_READY`, `PROJECTION_SYNC_READY revision=1 top=1 world=1`, `GODOT_RUNTIME_VERIFICATION=PASS`가 모두 필요하다.
+
+### Task 5 저장·가이드 가져오기·렌더링 기반
+
+Task 5는 저작권 없는 합성 `gangqueen-topview-guide-v1` fixture를 `SceneDocument`로 가져오고, 문서를 버전형 JSON으로 안전하게 저장하며, Godot/FFmpeg를 직접 실행하지 않는 렌더 작업 큐를 제공한다. fixture는 `samples/guides/synthetic-topview-v1.scene.json`에 두고 `format`, `coordinate_system`, `backstab_rules`, `scene`, `evaluations`와 알 수 없는 원본 필드를 보존한다. 네 역할(`host`, `invader`, `phantom1`, `phantom2`)과 t=`0.25`, `0.9`, `1.4` 키프레임, `lock_on`/`target` 및 `current_index` 선택 힌트(문서 의미 데이터에는 미저장)를 검증한다. 가져오기 설정은 origin `(100,200)`, scale `0.1`, ground height `0`, FPS `30`이며 guide x/y를 world X/Z로 변환한다.
+
+저장 포맷은 정확히 `pvp-guide-scene/1`인 버전형 camelCase JSON이다. `System.Text.Json` DTO로 indented UTF-8과 strict numbers를 사용하고 알 수 없는 문서 멤버는 거부한다. revision/event/current time과 선택·UI·Godot 상태는 저장하지 않는다. `SaveAtomicAsync`는 절대 경로, `.pvpscene.json` 확장자, 존재하는 부모를 확인한 뒤 같은 디렉터리의 고유 임시 파일에 flush하고 다시 Deserialize 검증 후 원자적으로 교체한다. 실패·취소 시 기존 파일 바이트를 보존하고 임시 파일을 정리하며, 교체 실패 시 검증된 임시 파일을 복구용으로 남긴다.
+
+serializer는 필수 구조 멤버가 null이거나 중첩 배열·객체 항목이 null인 JSON도 경로를 포함한 구조 오류로 거부한다. importer는 중첩 객체의 알 수 없는 멤버를 warning으로 알리면서 raw source metadata에 보존하고, 원자 저장은 임시 파일 검증 직후 move 직전에 취소를 다시 확인해 기존 destination을 보호한다.
+
+테스트 임시 데이터는 반드시 `D:\3D-render\cache\tests\<guid>` 아래에만 만들고, exact root를 검증한 뒤 정리한다. `RenderQueue`는 `D:\3D-render` 하위 출력 경로, 문서 ID/revision, 해상도·FPS, decimal `[start,end)`를 검증하고 `FrameCount=ceil((end-start)*fps)`, `GetTimeSeconds(n)=start+n/fps`를 사용한다. 기본 패턴은 `frame_%06d.png`, 시작 번호는 1이며 FFmpeg `.exe` 절대 경로와 방어적 복사한 인자 배열(`-n` 포함)을 보관한다. 셸 문자열이나 수동 quoting은 사용하지 않고 실제 Godot/FFmpeg 프로세스도 실행하지 않는다.
+
+Task 5를 저장소 루트(`D:\3D-render`)에서 검증하는 정확한 명령은 다음과 같다.
+
+```powershell
+$env:NUGET_PACKAGES='D:\3D-render\tools\nuget-packages'
+dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Infrastructure.Tests\PvpGuide.Infrastructure.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo
+& .\scripts\Test-ProjectSkeleton.ps1
+& .\scripts\Test-GodotRuntime.ps1
+```
+
+세 테스트 프로젝트와 두 구조·런타임 검사 스크립트가 모두 종료 코드 0이어야 하며, importer·roundtrip·atomic save·RenderQueue 검증 실패가 없어야 한다.
 
 ## Git 작업 방식
 

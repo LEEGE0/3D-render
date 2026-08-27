@@ -18,8 +18,20 @@ public sealed class SceneDocument : ISceneSnapshotSource
     private readonly ReadOnlyCollection<ActorTrack> _readOnlyActors;
 
     public SceneDocument(string documentId, double durationSeconds, int framesPerSecond)
+        : this(documentId, documentId, null, durationSeconds, framesPerSecond, null)
+    {
+    }
+
+    private SceneDocument(
+        string documentId,
+        string name,
+        string? note,
+        double durationSeconds,
+        int framesPerSecond,
+        ImportMetadata? importMetadata)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(documentId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(name);
         if (!double.IsFinite(durationSeconds) || durationSeconds < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(durationSeconds), "Document duration must be finite and non-negative.");
@@ -31,8 +43,11 @@ public sealed class SceneDocument : ISceneSnapshotSource
         }
 
         DocumentId = documentId;
+        Name = name;
+        Note = note;
         DurationSeconds = durationSeconds;
         FramesPerSecond = framesPerSecond;
+        ImportMetadata = importMetadata;
         _readOnlyActors = _actors.AsReadOnly();
     }
 
@@ -40,9 +55,15 @@ public sealed class SceneDocument : ISceneSnapshotSource
 
     public string DocumentId { get; }
 
+    public string Name { get; }
+
+    public string? Note { get; }
+
     public double DurationSeconds { get; }
 
     public int FramesPerSecond { get; }
+
+    public ImportMetadata? ImportMetadata { get; }
 
     public long Revision { get; private set; }
 
@@ -50,23 +71,55 @@ public sealed class SceneDocument : ISceneSnapshotSource
 
     public event EventHandler<SceneDocumentChangedEventArgs>? Changed;
 
+    public static SceneDocument Create(
+        string documentId,
+        string name,
+        string? note,
+        double durationSeconds,
+        int framesPerSecond,
+        IEnumerable<ActorTrack> actors,
+        ImportMetadata? importMetadata = null)
+    {
+        ArgumentNullException.ThrowIfNull(actors);
+        var copiedActors = actors.ToArray();
+        if (copiedActors.Any(actor => actor is null))
+        {
+            throw new ArgumentException("Actor collections cannot contain null values.", nameof(actors));
+        }
+
+        var document = new SceneDocument(documentId, name, note, durationSeconds, framesPerSecond, importMetadata);
+        var actorsById = new Dictionary<string, ActorTrack>(StringComparer.Ordinal);
+        foreach (var actor in copiedActors)
+        {
+            if (!actorsById.TryAdd(actor.ActorId, actor))
+            {
+                throw new ArgumentException($"An actor named '{actor.ActorId}' already exists.", nameof(actors));
+            }
+        }
+
+        foreach (var actor in copiedActors)
+        {
+            document.ValidateActor(actor, actorsById.Keys, nameof(actors));
+        }
+
+        foreach (var actor in copiedActors)
+        {
+            document._actorsById.Add(actor.ActorId, actor);
+            document._actors.Add(actor);
+        }
+
+        return document;
+    }
+
     public void AddActor(ActorTrack actor)
     {
         ArgumentNullException.ThrowIfNull(actor);
-        if (actor.Keyframes.Count == 0)
-        {
-            throw new ArgumentException("An actor must have at least one keyframe.", nameof(actor));
-        }
-
         if (_actorsById.ContainsKey(actor.ActorId))
         {
             throw new ArgumentException($"An actor named '{actor.ActorId}' already exists.", nameof(actor));
         }
 
-        foreach (var keyframe in actor.Keyframes)
-        {
-            EnsureTimeWithinDocument(keyframe.TimeSeconds, nameof(actor));
-        }
+        ValidateActor(actor, _actorsById.Keys.Append(actor.ActorId), nameof(actor));
 
         _actorsById.Add(actor.ActorId, actor);
         _actors.Add(actor);
@@ -83,7 +136,13 @@ public sealed class SceneDocument : ISceneSnapshotSource
             throw new ArgumentException($"Actor '{actorId}' does not exist.", nameof(actorId));
         }
 
-        var updatedActor = new ActorTrack(actorId, actor.Keyframes.Append(keyframe));
+        var updatedActor = new ActorTrack(
+            actorId,
+            actor.DisplayName,
+            actor.Role,
+            actor.TransformKeyframes.Append(keyframe),
+            actor.ActionKeyframes,
+            actor.LockOnKeyframes);
         _actorsById[actorId] = updatedActor;
         _actors[_actors.IndexOf(actor)] = updatedActor;
         RaiseChanged();
@@ -110,11 +169,55 @@ public sealed class SceneDocument : ISceneSnapshotSource
         }
     }
 
+    private void ValidateActor(ActorTrack actor, IEnumerable<string> actorIds, string parameterName)
+    {
+        if (actor.TransformKeyframes.Count == 0)
+        {
+            throw new ArgumentException("An actor must have at least one transform keyframe.", parameterName);
+        }
+
+        foreach (var timeSeconds in actor.TransformKeyframes.Select(frame => frame.TimeSeconds)
+                     .Concat(actor.ActionKeyframes.Select(frame => frame.TimeSeconds))
+                     .Concat(actor.LockOnKeyframes.Select(frame => frame.TimeSeconds)))
+        {
+            EnsureTimeWithinDocument(timeSeconds, parameterName);
+        }
+
+        var knownActorIds = actorIds.ToHashSet(StringComparer.Ordinal);
+        foreach (var lockOn in actor.LockOnKeyframes)
+        {
+            if (lockOn.TargetActorId is null)
+            {
+                continue;
+            }
+
+            if (lockOn.TargetActorId == actor.ActorId || !knownActorIds.Contains(lockOn.TargetActorId))
+            {
+                throw new ArgumentException("Lock-on targets must name a different actor in the same document.", parameterName);
+            }
+        }
+    }
+
     private void RaiseChanged()
     {
         Revision++;
         Changed?.Invoke(this, new SceneDocumentChangedEventArgs(Revision));
     }
+}
+
+public sealed class ImportMetadata
+{
+    public ImportMetadata(string sourceFormat, string rawSourcePayload)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sourceFormat);
+        ArgumentNullException.ThrowIfNull(rawSourcePayload);
+        SourceFormat = sourceFormat;
+        RawSourcePayload = rawSourcePayload;
+    }
+
+    public string SourceFormat { get; }
+
+    public string RawSourcePayload { get; }
 }
 
 public sealed class SceneDocumentChangedEventArgs(long revision) : EventArgs

@@ -5,30 +5,55 @@ namespace PvpGuide.Domain.Actors;
 
 public sealed class ActorTrack
 {
-    private readonly IReadOnlyList<TransformKeyframe> _keyframes;
+    private readonly ReadOnlyCollection<TransformKeyframe> _transformKeyframes;
+    private readonly ReadOnlyCollection<ActionKeyframe> _actionKeyframes;
+    private readonly ReadOnlyCollection<LockOnKeyframe> _lockOnKeyframes;
 
     public ActorTrack(string actorId, IEnumerable<TransformKeyframe> keyframes)
+        : this(actorId, actorId, actorId, keyframes, [], [])
+    {
+    }
+
+    public ActorTrack(
+        string actorId,
+        string displayName,
+        string role,
+        IEnumerable<TransformKeyframe> transformKeyframes,
+        IEnumerable<ActionKeyframe> actionKeyframes,
+        IEnumerable<LockOnKeyframe> lockOnKeyframes)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
-        ArgumentNullException.ThrowIfNull(keyframes);
+        ArgumentException.ThrowIfNullOrWhiteSpace(displayName);
+        ArgumentException.ThrowIfNullOrWhiteSpace(role);
+        ArgumentNullException.ThrowIfNull(transformKeyframes);
+        ArgumentNullException.ThrowIfNull(actionKeyframes);
+        ArgumentNullException.ThrowIfNull(lockOnKeyframes);
 
-        var copiedKeyframes = keyframes.ToArray();
-        Array.Sort(copiedKeyframes, static (left, right) => left.TimeSeconds.CompareTo(right.TimeSeconds));
-        for (var index = 1; index < copiedKeyframes.Length; index++)
-        {
-            if (copiedKeyframes[index - 1].TimeSeconds == copiedKeyframes[index].TimeSeconds)
-            {
-                throw new ArgumentException("Keyframe times must be unique.", nameof(keyframes));
-            }
-        }
+        var copiedTransforms = CopySortedUnique(transformKeyframes, static frame => frame.TimeSeconds, nameof(transformKeyframes));
+        var copiedActions = CopySortedUnique(actionKeyframes, static frame => frame.TimeSeconds, nameof(actionKeyframes));
+        var copiedLockOns = CopySortedUnique(lockOnKeyframes, static frame => frame.TimeSeconds, nameof(lockOnKeyframes));
 
         ActorId = actorId;
-        _keyframes = Array.AsReadOnly(copiedKeyframes);
+        DisplayName = displayName;
+        Role = role;
+        _transformKeyframes = Array.AsReadOnly(copiedTransforms);
+        _actionKeyframes = Array.AsReadOnly(copiedActions);
+        _lockOnKeyframes = Array.AsReadOnly(copiedLockOns);
     }
 
     public string ActorId { get; }
 
-    public IReadOnlyList<TransformKeyframe> Keyframes => _keyframes;
+    public string DisplayName { get; }
+
+    public string Role { get; }
+
+    public IReadOnlyList<TransformKeyframe> TransformKeyframes => _transformKeyframes;
+
+    public IReadOnlyList<ActionKeyframe> ActionKeyframes => _actionKeyframes;
+
+    public IReadOnlyList<LockOnKeyframe> LockOnKeyframes => _lockOnKeyframes;
+
+    public IReadOnlyList<TransformKeyframe> Keyframes => _transformKeyframes;
 
     public EvaluatedTransform Evaluate(double timeSeconds)
     {
@@ -37,27 +62,27 @@ public sealed class ActorTrack
             throw new ArgumentOutOfRangeException(nameof(timeSeconds), "Evaluation time must be finite.");
         }
 
-        if (_keyframes.Count == 0)
+        if (_transformKeyframes.Count == 0)
         {
             throw new InvalidOperationException("An empty actor track cannot be evaluated.");
         }
 
-        if (timeSeconds <= _keyframes[0].TimeSeconds)
+        if (timeSeconds <= _transformKeyframes[0].TimeSeconds)
         {
-            return ToTransform(_keyframes[0]);
+            return ToTransform(_transformKeyframes[0]);
         }
 
-        if (timeSeconds >= _keyframes[^1].TimeSeconds)
+        if (timeSeconds >= _transformKeyframes[^1].TimeSeconds)
         {
-            return ToTransform(_keyframes[^1]);
+            return ToTransform(_transformKeyframes[^1]);
         }
 
-        for (var index = 1; index < _keyframes.Count; index++)
+        for (var index = 1; index < _transformKeyframes.Count; index++)
         {
-            var right = _keyframes[index];
+            var right = _transformKeyframes[index];
             if (timeSeconds <= right.TimeSeconds)
             {
-                return Interpolate(_keyframes[index - 1], right, timeSeconds);
+                return Interpolate(_transformKeyframes[index - 1], right, timeSeconds);
             }
         }
 
@@ -66,6 +91,26 @@ public sealed class ActorTrack
 
     private static EvaluatedTransform ToTransform(TransformKeyframe keyframe) =>
         new(keyframe.Position, keyframe.YawDegrees);
+
+    private static T[] CopySortedUnique<T>(IEnumerable<T> source, Func<T, double> getTime, string parameterName)
+    {
+        var copied = source.ToArray();
+        if (copied.Any(item => item is null))
+        {
+            throw new ArgumentException("Tracks cannot contain null keyframes.", parameterName);
+        }
+
+        Array.Sort(copied, (left, right) => getTime(left).CompareTo(getTime(right)));
+        for (var index = 1; index < copied.Length; index++)
+        {
+            if (getTime(copied[index - 1]) == getTime(copied[index]))
+            {
+                throw new ArgumentException("Keyframe times must be unique within a track.", parameterName);
+            }
+        }
+
+        return copied;
+    }
 
     private static EvaluatedTransform Interpolate(
         TransformKeyframe left,
