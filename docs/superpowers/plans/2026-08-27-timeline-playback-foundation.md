@@ -188,27 +188,27 @@
 
 **Produces:** slider/buttons/Space playback UI, lock-aware TopView and Inspector, lifecycle-safe controller
 
-- [ ] **Step 1: 시간 표시 formatter 테스트를 RED로 작성한다**
+- [x] **Step 1: 시간 표시 formatter 테스트를 RED로 작성한다**
 
   `TimelineTimeFormatter`는 Godot 없이 현재/전체 시간과 frame을 결정적으로 표시한다. 0초, 중간 frame, 끝점, 29.97 같은 비정수 시각에서 invariant 숫자 포맷과 한국어 label을 검증한다.
 
-- [ ] **Step 2: TimelineController와 장면 노드를 구현한다**
+- [x] **Step 2: TimelineController와 장면 노드를 구현한다**
 
   `Main.tscn`에 설계의 `TimelineControls`, `PlaybackButtons`, `PlayPauseButton`, `StopButton`, `TimeSlider`, `CurrentTimeLabel`, `TimelineStatus`를 정확한 이름으로 추가한다.
 
   controller는 slider max/step, button text, label, status를 초기화하고 signal을 clock/session에 연결한다. slider 사용자 변경은 Pause→Seek, Play/Pause와 Space는 같은 `TogglePlayback()` 경로, Stop은 `Stop()`을 호출한다. programmatic slider update 중에는 signal guard를 사용한다. Dispose는 모든 Godot signal과 Application event를 해제한다.
 
-- [ ] **Step 3: TopView/Inspector 편집 잠금을 구현한다**
+- [x] **Step 3: TopView/Inspector 편집 잠금을 구현한다**
 
   `TopViewSurface`는 session의 edit availability를 구독해 잠금 전환 시 local drag와 preview를 취소한다. 잠금 중 actor 선택은 유지하되 이동/회전 preview를 시작하지 않는다.
 
   `TransformInspectorController`는 잠금 중 SpinBox 4개, Apply, Undo, Redo를 disabled로 만들고 이유를 표시한다. 잠금 해제 시 committed 최초 키 값을 재반영하며 history 상태에 맞춰 Undo/Redo를 복구한다. programmatic 값 반영이 preview를 만들지 않는 기존 guard를 유지한다.
 
-- [ ] **Step 4: Main lifecycle과 키 입력을 조립한다**
+- [x] **Step 4: Main lifecycle과 키 입력을 조립한다**
 
   `_Ready()`에서 timeline controls를 검증하고 controller를 만든다. `_Process(delta)`는 준비된 playback에 `Advance(delta)`만 호출한다. Space press는 echo/release를 무시하고 timeline controller의 공개 toggle 경로를 사용한다. `_ExitTree()`는 controller와 기존 event 구독을 모두 해제한다.
 
-- [ ] **Step 5: Editor 테스트·구조·기존 runtime을 직렬 검증한다**
+- [x] **Step 5: Editor 테스트·구조·기존 runtime을 직렬 검증한다**
 
   ```powershell
   dotnet test .\tests\PvpGuide.Application.Tests\PvpGuide.Application.Tests.csproj -c Debug --nologo
@@ -219,7 +219,7 @@
 
   기존 runtime 표식과 projection count는 그대로 통과해야 한다.
 
-- [ ] **Step 6: fresh spec/quality 리뷰 후 메인이 커밋·푸시한다**
+- [x] **Step 6: fresh spec/quality 리뷰 후 메인이 커밋·푸시한다**
 
   리뷰는 signal 재진입, Space echo, Godot lifecycle, 잠금 중 선택 유지, stale preview 정리, unlock history 상태를 확인한다.
 

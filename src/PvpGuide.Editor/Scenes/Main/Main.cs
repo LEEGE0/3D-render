@@ -1,10 +1,12 @@
 using Godot;
+using PvpGuide.Application.Playback;
 using PvpGuide.Application.Projection;
 using PvpGuide.Application.Sessions;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Actors;
 using PvpGuide.Domain.Timeline;
 using PvpGuide.Editor.Features.Inspector;
+using PvpGuide.Editor.Features.Timeline;
 using PvpGuide.Editor.Features.TopView;
 using PvpGuide.Editor.Features.ViewportSync;
 
@@ -15,7 +17,9 @@ public partial class Main : Control
     private SceneProjectionController? _projectionController;
     private TransformPreviewController? _previewController;
     private TransformInspectorController? _inspectorController;
+    private TimelineController? _timelineController;
     private TopViewSurface? _topViewSurface;
+    private PlaybackClock? _playback;
 
     private static readonly string[] RequiredPanels =
     [
@@ -53,13 +57,20 @@ public partial class Main : Control
         var applyButton = GetNodeOrNull<Button>("InspectorPanel/TransformInspector/ApplyButton");
         var undoButton = GetNodeOrNull<Button>("InspectorPanel/TransformInspector/UndoButton");
         var redoButton = GetNodeOrNull<Button>("InspectorPanel/TransformInspector/RedoButton");
+        var playPauseButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/PlaybackButtons/PlayPauseButton");
+        var stopButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/PlaybackButtons/StopButton");
+        var timeSlider = GetNodeOrNull<HSlider>("TimelinePanel/TimelineControls/TimeSlider");
+        var currentTimeLabel = GetNodeOrNull<Label>("TimelinePanel/TimelineControls/CurrentTimeLabel");
+        var timelineStatus = GetNodeOrNull<Label>("TimelinePanel/TimelineControls/TimelineStatus");
         if (topViewSurface is null || worldViewportContainer is null || worldViewport is null || worldRoot is null ||
             camera is null || light is null || ground is null || actorsRoot is null ||
             selectedActorLabel is null || errorLabel is null ||
             xInput is null || yInput is null || zInput is null || yawInput is null ||
-            applyButton is null || undoButton is null || redoButton is null)
+            applyButton is null || undoButton is null || redoButton is null ||
+            playPauseButton is null || stopButton is null || timeSlider is null ||
+            currentTimeLabel is null || timelineStatus is null)
         {
-            GD.PushError("기본 편집 UI에 필요한 자식 노드가 없습니다.");
+            GD.PushError("타임라인과 기본 편집 UI에 필요한 자식 노드가 없습니다.");
             return;
         }
 
@@ -76,62 +87,94 @@ public partial class Main : Control
 
         var session = new DocumentSession(document);
         var worldAdapter = new WorldViewProjectionAdapter(actorsRoot);
-        topViewSurface.Initialize(session);
-        _topViewSurface = topViewSurface;
-        _projectionController = new SceneProjectionController(
-            session.SnapshotSource,
-            session.Playback,
-            topViewSurface,
-            worldAdapter);
-        _previewController = new TransformPreviewController(
-            session,
-            topViewSurface,
-            worldAdapter);
-        _inspectorController = new TransformInspectorController(
-            session,
-            selectedActorLabel,
-            errorLabel,
-            xInput,
-            yInput,
-            zInput,
-            yawInput,
-            applyButton,
-            undoButton,
-            redoButton);
+        try
+        {
+            _playback = session.Playback;
+            _topViewSurface = topViewSurface;
+            topViewSurface.Initialize(session);
+            _projectionController = new SceneProjectionController(
+                session.SnapshotSource,
+                session.Playback,
+                topViewSurface,
+                worldAdapter);
+            _previewController = new TransformPreviewController(
+                session,
+                topViewSurface,
+                worldAdapter);
+            _inspectorController = new TransformInspectorController(
+                session,
+                selectedActorLabel,
+                errorLabel,
+                xInput,
+                yInput,
+                zInput,
+                yawInput,
+                applyButton,
+                undoButton,
+                redoButton);
+            _timelineController = new TimelineController(
+                session,
+                playPauseButton,
+                stopButton,
+                timeSlider,
+                currentTimeLabel,
+                timelineStatus);
 
-        _projectionController.ProjectCurrent();
-        GD.Print($"PROJECTION_SYNC_READY revision={document.Revision} top={topViewSurface.ApplyCount} world={worldAdapter.ApplyCount}");
+            _projectionController.ProjectCurrent();
+            GD.Print($"PROJECTION_SYNC_READY revision={document.Revision} top={topViewSurface.ApplyCount} world={worldAdapter.ApplyCount}");
 
-        RunBasicEditingIntegration(
-            document,
-            session,
-            topViewSurface,
-            worldAdapter,
-            actorsRoot,
-            xInput,
-            yInput,
-            zInput,
-            yawInput,
-            applyButton,
-            undoButton,
-            redoButton,
-            errorLabel);
-        GD.Print(
-            $"BASIC_EDITING_READY revision={document.Revision} selected={session.SelectedActorId} " +
-            "moved=1 undo=1 redo=1 " +
-            $"top={topViewSurface.ApplyCount} world={worldAdapter.ApplyCount} actors={worldAdapter.ActorCount}");
+            RunBasicEditingIntegration(
+                document,
+                session,
+                topViewSurface,
+                worldAdapter,
+                actorsRoot,
+                xInput,
+                yInput,
+                zInput,
+                yawInput,
+                applyButton,
+                undoButton,
+                redoButton,
+                errorLabel);
+            GD.Print(
+                $"BASIC_EDITING_READY revision={document.Revision} selected={session.SelectedActorId} " +
+                "moved=1 undo=1 redo=1 " +
+                $"top={topViewSurface.ApplyCount} world={worldAdapter.ApplyCount} actors={worldAdapter.ActorCount}");
+        }
+        catch
+        {
+            DisposeControllers();
+            throw;
+        }
     }
 
-    public override void _ExitTree()
+    public override void _Process(double delta) => _playback?.Advance(delta);
+
+    public override void _UnhandledKeyInput(InputEvent @event)
     {
+        if (@event is InputEventKey { Keycode: Key.Space, Pressed: true, Echo: false })
+        {
+            _timelineController?.TogglePlayback();
+            GetViewport().SetInputAsHandled();
+        }
+    }
+
+    public override void _ExitTree() => DisposeControllers();
+
+    private void DisposeControllers()
+    {
+        _timelineController?.Dispose();
+        _timelineController = null;
+        _projectionController?.Dispose();
+        _projectionController = null;
+        _previewController?.Dispose();
+        _previewController = null;
         _inspectorController?.Dispose();
         _inspectorController = null;
         _topViewSurface?.DetachSession();
         _topViewSurface = null;
-        _previewController?.Dispose();
-        _previewController = null;
-        _projectionController?.Dispose();
-        _projectionController = null;
+        _playback = null;
     }
 
     private static void RunBasicEditingIntegration(

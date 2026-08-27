@@ -44,6 +44,7 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         _session = session;
         _selectedActorId = session.SelectedActorId;
         session.SelectionChanged += OnSelectionChanged;
+        session.EditAvailabilityChanged += OnEditAvailabilityChanged;
         FocusExited += OnFocusExited;
         MouseFilter = MouseFilterEnum.Stop;
         FocusMode = FocusModeEnum.All;
@@ -190,6 +191,7 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
             if (session is not null)
             {
                 session.SelectionChanged -= OnSelectionChanged;
+                session.EditAvailabilityChanged -= OnEditAvailabilityChanged;
             }
 
             FocusExited -= OnFocusExited;
@@ -230,6 +232,12 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         {
             _session!.CancelPreview();
             _session!.SelectActor(hit.ActorId);
+            if (!_session.CanEditSelectedTransform)
+            {
+                ResetDrag();
+                return;
+            }
+
             var selected = _session.GetSelectedTransform()
                 ?? throw new InvalidOperationException("선택한 배우의 변환을 찾을 수 없습니다.");
             _pressPoint = pointer;
@@ -257,6 +265,12 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
 
     private void HandleMotion(ScreenPoint pointer)
     {
+        if (!_session!.CanEditSelectedTransform)
+        {
+            CancelDrag();
+            return;
+        }
+
         var mapper = CreateMapper();
         if (_dragMode == DragMode.MovePending)
         {
@@ -315,6 +329,12 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
 
     private void HandleRelease()
     {
+        if (!_session!.CanEditSelectedTransform)
+        {
+            CancelDrag();
+            return;
+        }
+
         try
         {
             if (_dragMode is DragMode.Move or DragMode.Rotate)
@@ -391,6 +411,16 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     {
         _selectedActorId = eventArgs.SelectedActorId;
         ResetDrag();
+        QueueRedraw();
+    }
+
+    private void OnEditAvailabilityChanged(object? sender, EditAvailabilityChangedEventArgs eventArgs)
+    {
+        if (!eventArgs.CanEditSelectedTransform)
+        {
+            CancelDrag();
+        }
+
         QueueRedraw();
     }
 

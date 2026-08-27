@@ -63,10 +63,12 @@ public sealed class TransformInspectorController : IDisposable
         _redoButton.Pressed += OnRedoPressed;
         _session.SelectionChanged += OnSelectionChanged;
         _session.PreviewChanged += OnPreviewChanged;
+        _session.EditAvailabilityChanged += OnEditAvailabilityChanged;
         _session.HistoryChanged += OnHistoryChanged;
         _session.SnapshotSource.Changed += OnDocumentChanged;
         RefreshCommittedValues();
         UpdateButtonStates();
+        RefreshEditAvailabilityPresentation();
     }
 
     public void Dispose()
@@ -87,6 +89,7 @@ public sealed class TransformInspectorController : IDisposable
         _redoButton.Pressed -= OnRedoPressed;
         _session.SelectionChanged -= OnSelectionChanged;
         _session.PreviewChanged -= OnPreviewChanged;
+        _session.EditAvailabilityChanged -= OnEditAvailabilityChanged;
         _session.HistoryChanged -= OnHistoryChanged;
         _session.SnapshotSource.Changed -= OnDocumentChanged;
         _disposed = true;
@@ -105,6 +108,13 @@ public sealed class TransformInspectorController : IDisposable
     {
         if (_updatingInputs)
         {
+            return;
+        }
+
+        if (!_session.CanEditSelectedTransform)
+        {
+            RefreshCommittedValues();
+            ShowEditLockReason();
             return;
         }
 
@@ -147,6 +157,12 @@ public sealed class TransformInspectorController : IDisposable
 
     private void OnUndoPressed()
     {
+        if (!_session.CanEditSelectedTransform)
+        {
+            ShowEditLockReason();
+            return;
+        }
+
         CancelActivePreview();
         if (!_session.Undo())
         {
@@ -161,6 +177,12 @@ public sealed class TransformInspectorController : IDisposable
 
     private void OnRedoPressed()
     {
+        if (!_session.CanEditSelectedTransform)
+        {
+            ShowEditLockReason();
+            return;
+        }
+
         CancelActivePreview();
         if (!_session.Redo())
         {
@@ -175,6 +197,13 @@ public sealed class TransformInspectorController : IDisposable
 
     private void CommitPreview()
     {
+        if (!_session.CanEditSelectedTransform)
+        {
+            RefreshCommittedValues();
+            ShowEditLockReason();
+            return;
+        }
+
         if (_session.SelectedActorId is null)
         {
             ShowError("변환을 적용하려면 먼저 배우를 선택하세요.");
@@ -262,8 +291,17 @@ public sealed class TransformInspectorController : IDisposable
     private void OnSelectionChanged(object? sender, SelectionChangedEventArgs eventArgs)
     {
         _hasActivePreview = false;
-        ClearError();
         RefreshCommittedValues();
+        UpdateButtonStates();
+        RefreshEditAvailabilityPresentation();
+    }
+
+    private void OnEditAvailabilityChanged(object? sender, EditAvailabilityChangedEventArgs eventArgs)
+    {
+        _hasActivePreview = false;
+        RefreshCommittedValues();
+        UpdateButtonStates();
+        RefreshEditAvailabilityPresentation();
     }
 
     private void OnPreviewChanged(object? sender, TransformPreviewChangedEventArgs eventArgs)
@@ -313,7 +351,7 @@ public sealed class TransformInspectorController : IDisposable
                 ?? throw new InvalidOperationException("선택한 배우의 최초 변환 키프레임이 없습니다.");
             _selectedActorLabel.Text = $"선택된 배우: {actorId} (최초 키프레임)";
             SetInputs(transform.Position, transform.YawDegrees);
-            SetInputsEnabled(true);
+            SetInputsEnabled(_session.CanEditSelectedTransform);
         }
         catch (InvalidOperationException exception)
         {
@@ -351,9 +389,24 @@ public sealed class TransformInspectorController : IDisposable
 
     private void UpdateButtonStates()
     {
-        _undoButton.Disabled = !_session.CanUndo;
-        _redoButton.Disabled = !_session.CanRedo;
+        _undoButton.Disabled = !_session.CanEditSelectedTransform || !_session.CanUndo;
+        _redoButton.Disabled = !_session.CanEditSelectedTransform || !_session.CanRedo;
     }
+
+    private void RefreshEditAvailabilityPresentation()
+    {
+        if (_session.CanEditSelectedTransform)
+        {
+            ClearError();
+        }
+        else
+        {
+            ShowEditLockReason();
+        }
+    }
+
+    private void ShowEditLockReason() => ShowError(
+        _session.EditLockReason ?? "현재 시각에서는 변환을 편집할 수 없습니다.");
 
     private void CancelActivePreview()
     {
