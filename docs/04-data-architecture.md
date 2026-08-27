@@ -60,6 +60,30 @@ SceneDocument
 - `rotationInterpolation`: `step`, `shortest_linear`, 향후 `squad`
 - `note`: 해당 시점 설명
 
+현재 구현의 `TransformKeyframe`은 ID, `timeSeconds`, `Position3`, `yawDegrees`만 영구 값으로 가진다. Yaw는 생성 시 `[0, 360)`로 정규화한다. time은 유한한 0 이상 값이어야 하며, `SceneDocument`에 넣거나 update할 때에는 문서 duration 안이어야 한다. actor의 transform track은 time 오름차순과 ID 고유성을 유지하고, 같은 time은 허용하지 않는다. 각 actor에는 최소 한 개의 transform keyframe이 반드시 남아야 한다.
+
+### CRUD와 preimage 무결성
+
+변환 CRUD는 `SceneDocument`의 다음 경계에서만 영구 데이터를 바꾼다.
+
+| 연산 | Domain 경계 | preimage / 불변 조건 |
+| --- | --- | --- |
+| Add | `AddKeyframe(actorId, keyframe)` | actor 존재, time이 문서 범위 안, 새 ID·time이 해당 track에서 고유해야 한다. |
+| Update | `UpdateTransformKeyframe(actorId, expectedCurrent, replacement)` | ID는 유지한다. 현재 값이 `expectedCurrent`의 ID·time·position·정규화 Yaw와 모두 같아야 하며, replacement time은 문서 범위 및 track 고유성 조건을 만족해야 한다. |
+| Delete | `RemoveTransformKeyframe(actorId, expectedCurrent)` | 현재 값이 정확한 preimage와 같아야 하며 마지막 transform keyframe은 제거할 수 없다. |
+
+`expectedCurrent`는 UI에서 편집을 시작했을 때의 immutable keyframe 값이다. 검증이 실패하면 Domain은 actor collection을 교체하거나 revision을 올리기 전에 예외로 끝난다. Application command는 이를 `Conflict`로 다루며, stale update/undo/redo가 최신 committed 값을 덮어쓰지 않는다. 의미적으로 같은 update는 `NoChange`이고 revision·Undo/Redo history를 만들지 않는다. 성공한 Domain 변경은 새 immutable `ActorTrack`을 만들어 교체하고 revision을 정확히 한 번 증가시킨다.
+
+### 영구 문서와 비영구 세션 상태
+
+다음 값은 `SceneDocument` 저장 모델이 아니라 `DocumentSession`의 런타임 상태다.
+
+- `SelectedActorId`, `SelectedTransformKeyframeId`와 선택한 keyframe 객체
+- `PlaybackClock`의 현재 time과 playing/paused 상태
+- 활성 `TransformPreview`, Undo/Redo stack, 버튼 가능 여부와 잠금 이유
+
+marker 클릭은 위 selection만 바꾸고 선택 keyframe time으로 seek한다. 새 Add 뒤에는 새 keyframe, Delete 뒤에는 가장 가까운 남은 keyframe을 선택한다. 문서 변경 또는 history 전환 뒤에도 ID가 유효하면 selection을 유지하고, 유효하지 않으면 현재 time의 marker 또는 가장 가까운 marker로 다시 맞춘다. 이 규칙은 저장 파일에 UI 선택을 섞지 않고 Inspector·marker·투영을 동기화한다.
+
 ### ActionKeyframe
 
 - `timeSeconds`

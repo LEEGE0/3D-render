@@ -36,7 +36,7 @@
 - Consumes: 기존 `TransformKeyframe`, `ActorTrack` 정렬·유일성 생성자, `SceneDocument.RaiseChanged()`
 - Produces: `ActorTrack.UpdateTransformKeyframe(expectedCurrent, replacement)`, `ActorTrack.RemoveTransformKeyframe(expectedCurrent)`, `SceneDocument.UpdateTransformKeyframe(actorId, expectedCurrent, replacement)`, `SceneDocument.RemoveTransformKeyframe(actorId, expectedCurrent)`
 
-- [ ] **Step 1: update/time-move RED 테스트를 작성한다**
+- [x] **Step 1: update/time-move RED 테스트를 작성한다**
 
   `SceneDocumentTests`에 time 4 keyframe을 time 3과 새 pose로 바꾸는 성공 테스트를 추가한다. ID 유지, `[0,3]` 정렬, t=2 보간, revision/event 정확히 1회를 assertion한다.
 
@@ -51,13 +51,13 @@ Assert.Equal(1, document.Revision);
 Assert.Equal(1, notifications);
 ```
 
-- [ ] **Step 2: update RED를 확인한다**
+- [x] **Step 2: update RED를 확인한다**
 
   Run: `dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo --filter "FullyQualifiedName~UpdateTransformKeyframe"`
 
   Expected: FAIL — `SceneDocument.UpdateTransformKeyframe`가 정의되지 않음.
 
-- [ ] **Step 3: 최소 update 구현을 추가한다**
+- [x] **Step 3: 최소 update 구현을 추가한다**
 
 ```csharp
 public ActorTrack UpdateTransformKeyframe(
@@ -76,7 +76,7 @@ public ActorTrack UpdateTransformKeyframe(
 
   `SceneDocument.UpdateTransformKeyframe`는 replacement time을 `EnsureTimeWithinDocument`로 검증하고 same transform이면 `false`, 아니면 actor를 교체한 뒤 `RaiseChanged()`와 `true`를 반환한다. 기존 `ReplaceTransformKeyframe`은 time 동일 검증 후 새 update API를 호출한다.
 
-- [ ] **Step 4: update 충돌·원자성 테스트를 추가한다**
+- [x] **Step 4: update 충돌·원자성 테스트를 추가한다**
 
   다음 각각에서 actor 인스턴스, revision, notification이 변하지 않는지 검사한다.
 
@@ -92,7 +92,7 @@ Assert.Throws<InvalidOperationException>(() => document.UpdateTransformKeyframe(
 
   동일 ID/time/position/정규화 yaw는 `false`와 event 0회를 assertion한다.
 
-- [ ] **Step 5: delete RED 테스트를 작성하고 확인한다**
+- [x] **Step 5: delete RED 테스트를 작성하고 확인한다**
 
 ```csharp
 document.RemoveTransformKeyframe("host", second);
@@ -105,7 +105,7 @@ Assert.Throws<InvalidOperationException>(() => document.RemoveTransformKeyframe(
 
   Expected: FAIL — remove API가 정의되지 않음.
 
-- [ ] **Step 6: 최소 delete 구현과 stale 검증을 추가한다**
+- [x] **Step 6: 최소 delete 구현과 stale 검증을 추가한다**
 
 ```csharp
 public ActorTrack RemoveTransformKeyframe(TransformKeyframe expectedCurrent)
@@ -122,13 +122,13 @@ public ActorTrack RemoveTransformKeyframe(TransformKeyframe expectedCurrent)
 
   `SceneDocument.RemoveTransformKeyframe`는 actor와 전체 expected를 검증하고 actor를 교체한 뒤 event를 한 번 발생시킨다. stale expected, 없는 actor/keyframe, 마지막 하나 삭제 실패의 mutation 0을 테스트한다.
 
-- [ ] **Step 7: Domain 전체 회귀를 실행한다**
+- [x] **Step 7: Domain 전체 회귀를 실행한다**
 
   Run: `dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo`
 
   Expected: 모든 Domain 테스트 PASS.
 
-- [ ] **Step 8: 메인 에이전트가 Task 1을 검토·커밋·푸시한다**
+- [x] **Step 8: 메인 에이전트가 Task 1을 검토·커밋·푸시한다**
 
   Exact stage paths: 위 세 파일.
 
@@ -147,7 +147,7 @@ public ActorTrack RemoveTransformKeyframe(TransformKeyframe expectedCurrent)
 - Consumes: document duration, control width, `IEnumerable<(string Id, double TimeSeconds)>`
 - Produces: `TransformTrackMarker`, `TransformTrackLayout.CreateMarkers(...)`, `TransformTrackLayout.HitTest(...)`
 
-- [ ] **Step 1: marker 좌표·hit-test RED 테스트를 작성한다**
+- [x] **Step 1: marker 좌표·hit-test RED 테스트를 작성한다**
 
 ```csharp
 var markers = TransformTrackLayout.CreateMarkers(
@@ -161,13 +161,13 @@ Assert.Equal("middle", TransformTrackLayout.HitTest(markers, pointerX: 104, hitR
 
   경계 밖 time, 비유한 duration/width/padding, 음수 hit radius는 예외를 assertion한다. 두 marker가 같은 거리면 time, ID ordinal 순으로 선택되는 테스트도 추가한다.
 
-- [ ] **Step 2: layout RED를 확인한다**
+- [x] **Step 2: layout RED를 확인한다**
 
   Run: `dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo --filter "FullyQualifiedName~TransformTrackLayout"`
 
   Expected: FAIL — layout 타입이 정의되지 않음.
 
-- [ ] **Step 3: Godot 독립 layout을 최소 구현한다**
+- [x] **Step 3: Godot 독립 layout을 최소 구현한다**
 
 ```csharp
 public sealed record TransformTrackMarker(string Id, double TimeSeconds, double X);
@@ -186,11 +186,11 @@ public static string? HitTest(
 
   파일에는 `Godot`, `Node`, `Control`, `Vector2` 참조를 넣지 않는다. duration이 0이면 모든 marker를 가운데가 아닌 left padding에 둔다.
 
-- [ ] **Step 4: skeleton 구조 검사를 갱신한다**
+- [x] **Step 4: skeleton 구조 검사를 갱신한다**
 
   `Test-ProjectSkeleton.ps1`의 required file 목록에 layout과 test를 추가하고 `Assert-NotContains`로 Godot 타입 독립성을 검사한다. 사람용 한글 문장 grep은 추가하지 않는다.
 
-- [ ] **Step 5: Editor 테스트와 skeleton을 실행한다**
+- [x] **Step 5: Editor 테스트와 skeleton을 실행한다**
 
   Run: `dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo`
 
@@ -198,7 +198,7 @@ public static string? HitTest(
 
   Expected: Editor PASS, `PROJECT_SKELETON_VERIFICATION=PASS`.
 
-- [ ] **Step 6: 메인 에이전트가 Task 2를 검토·커밋·푸시한다**
+- [x] **Step 6: 메인 에이전트가 Task 2를 검토·커밋·푸시한다**
 
   Exact stage paths: 위 세 파일.
 
@@ -220,7 +220,7 @@ public static string? HitTest(
 - Consumes: Task 1의 Domain CRUD, 기존 `ISceneEditCommand`, `SceneEditResult`, `PlaybackClock`, preview/history 예외 전이
 - Produces: `SelectedTransformKeyframeId`, `TransformKeyframeSelectionChanged`, `GetSelectedActorTransformKeyframes()`, `SelectTransformKeyframe(...)`, `CanAddTransformKeyframe`, `AddTransformKeyframeLockReason`, `CanDeleteSelectedTransformKeyframe`, `DeleteTransformKeyframeLockReason`, `AddTransformKeyframeAtCurrentTime()`, `UpdateSelectedTransformKeyframe(...)`, `RemoveSelectedTransformKeyframe()`
 
-- [ ] **Step 1: Command execute/undo/redo RED 테스트를 세션 공개 API로 작성한다**
+- [x] **Step 1: Command execute/undo/redo RED 테스트를 세션 공개 API로 작성한다**
 
   paused t=2에서 평가 pose로 Add하고 다음을 assertion한다.
 
@@ -237,13 +237,13 @@ Assert.True(session.Redo());
 
   update time/pose와 delete도 각각 Execute→Undo→Redo, revision 증가, history 이동을 검증한다.
 
-- [ ] **Step 2: Application RED를 확인한다**
+- [x] **Step 2: Application RED를 확인한다**
 
   Run: `dotnet test .\tests\PvpGuide.Application.Tests\PvpGuide.Application.Tests.csproj -c Debug --nologo --filter "FullyQualifiedName~Transform_keyframe"`
 
   Expected: FAIL — 새 세션 API가 정의되지 않음.
 
-- [ ] **Step 3: 세 Command를 최소 구현한다**
+- [x] **Step 3: 세 Command를 최소 구현한다**
 
 ```csharp
 internal sealed class AddTransformKeyframeCommand(string actorId, TransformKeyframe keyframe)
@@ -256,7 +256,7 @@ internal sealed class AddTransformKeyframeCommand(string actorId, TransformKeyfr
 
   Update는 `before→after`와 `after→before`, Remove는 remove와 add를 대칭으로 구현한다. 모든 생성자 인수를 null/공백 검증한다.
 
-- [ ] **Step 4: selection 상태와 가능 상태를 구현한다**
+- [x] **Step 4: selection 상태와 가능 상태를 구현한다**
 
 ```csharp
 public string? SelectedTransformKeyframeId { get; private set; }
@@ -281,11 +281,11 @@ public sealed class TransformKeyframeSelectionChangedEventArgs(
 
   actor 선택 시 현재 playback time의 exact keyframe만 선택한다. keyframe 선택 시 actor 내부 ID를 검증하고 기본적으로 pause→seek한다. `GetSelectedTransform()`은 첫 keyframe이 아니라 선택 ID를 조회한다. availability tolerance는 기존 `1e-9`를 재사용한다.
 
-- [ ] **Step 5: Add/Update/Delete 공개 API를 구현한다**
+- [x] **Step 5: Add/Update/Delete 공개 API를 구현한다**
 
   Add는 current snapshot pose와 충돌 없는 deterministic ordinal ID를 사용한다. Update는 selected full preimage와 새 time/pose로 Command를 실행하고 성공 후 새 time으로 seek한다. Delete는 최소 개수 guard 후 Command를 실행하고 nearest remaining을 `(abs(time-deletedTime), time, id)` 순으로 선택·seek한다.
 
-- [ ] **Step 6: selection·guard·conflict 테스트를 추가한다**
+- [x] **Step 6: selection·guard·conflict 테스트를 추가한다**
 
   다음을 각각 문서/history/selection assertion과 함께 검사한다.
 
@@ -299,17 +299,17 @@ public sealed class TransformKeyframeSelectionChangedEventArgs(
 - playback seek/play와 actor 전환 전에 active preview가 clear된다.
 - observer 예외가 mutation 후 발생하면 document revision과 history transition이 완료된다.
 
-- [ ] **Step 7: 기존 최초 keyframe 편집 회귀를 조정한다**
+- [x] **Step 7: 기존 최초 keyframe 편집 회귀를 조정한다**
 
   t=0 actor 선택 시 exact 첫 keyframe이 자동 선택되어 기존 Move/Rotate/Inspector 테스트가 같은 동작을 유지해야 한다. 중간 보간 시각은 keyframe 미선택 또는 selected time 불일치로 pose 편집이 잠기고 Add만 가능해야 한다.
 
-- [ ] **Step 8: Application 전체 회귀를 실행한다**
+- [x] **Step 8: Application 전체 회귀를 실행한다**
 
   Run: `dotnet test .\tests\PvpGuide.Application.Tests\PvpGuide.Application.Tests.csproj -c Debug --nologo`
 
   Expected: 모든 Application 테스트 PASS.
 
-- [ ] **Step 9: 메인 에이전트가 Task 3을 검토·커밋·푸시한다**
+- [x] **Step 9: 메인 에이전트가 Task 3을 검토·커밋·푸시한다**
 
   Exact stage paths: 위 여섯 파일.
 
@@ -332,7 +332,7 @@ public sealed class TransformKeyframeSelectionChangedEventArgs(
 - Consumes: Task 2 layout, Task 3 session selection/CRUD/availability API
 - Produces: 실제 marker draw/hit, Add/Delete toolbar, TimeInput을 포함한 선택 keyframe Inspector, UI signal 기반 CRUD 흐름
 
-- [ ] **Step 1: Main scene 구조 RED를 만든다**
+- [x] **Step 1: Main scene 구조 RED를 만든다**
 
   `Test-ProjectSkeleton.ps1`에서 다음 node와 파일 존재를 검사한다.
 
@@ -349,7 +349,7 @@ TimeInput
 
   Expected: FAIL — 새 파일/node가 없음.
 
-- [ ] **Step 2: scene node와 surface 골격을 추가한다**
+- [x] **Step 2: scene node와 surface 골격을 추가한다**
 
   `Main.tscn`에 marker surface 최소 높이 44, toolbar 버튼 두 개, Inspector label/time SpinBox를 추가한다. `TransformTrackSurface`는 session을 Attach/Detach하고 `_Draw()`에서 선·다이아몬드·선택 강조를 그리며 `_GuiInput()`에서 실제 left-click을 layout `HitTest`로 전달한다.
 
@@ -362,11 +362,11 @@ public override void _GuiInput(InputEvent @event);
 
   document Changed, actor/keyframe selection, playback Changed에서 `QueueRedraw()`하고 `_ExitTree()` 이전에 Detach한다.
 
-- [ ] **Step 3: TimelineController에 Add/Delete와 selection presentation을 연결한다**
+- [x] **Step 3: TimelineController에 Add/Delete와 selection presentation을 연결한다**
 
   생성자에 surface와 두 버튼을 추가하고 signal을 구독한다. button state는 `CanAddTransformKeyframe`과 `CanDeleteSelectedTransformKeyframe`만 사용한다. 비활성화·Conflict 문구는 `AddTransformKeyframeLockReason`과 `DeleteTransformKeyframeLockReason`을 표시한다. playback/selection/document 변경 뒤 marker와 state를 갱신한다.
 
-- [ ] **Step 4: Inspector를 선택 keyframe과 TimeInput 기준으로 바꾼다**
+- [x] **Step 4: Inspector를 선택 keyframe과 TimeInput 기준으로 바꾼다**
 
   생성자에 `SelectedKeyframeLabel`, `TimeInput`을 추가한다. `RefreshCommittedValues()`는 selected keyframe을 표시하고 없으면 입력을 비활성화한다. pose ValueChanged만 preview를 갱신하고 TimeInput ValueChanged는 preview를 시작하지 않는다. Apply/Enter는 time/pose를 `UpdateSelectedTransformKeyframe` 한 번으로 확정한다.
 
@@ -379,17 +379,17 @@ var result = _session.UpdateSelectedTransformKeyframe(
 
   range 오류, same-value, stale conflict, mutation-after-observer 메시지를 기존 패턴으로 구분한다.
 
-- [ ] **Step 5: TopView가 session selection만 소비하는지 기계적으로 검증한다**
+- [x] **Step 5: TopView가 session selection만 소비하는지 기계적으로 검증한다**
 
   Run: `rg -n "TransformKeyframes|GetTransformKeyframe|최초" src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs`
 
   Expected: 출력 없음. 현재 `TopViewSurface`는 `CanEditSelectedTransform`과 `GetSelectedTransform()`만 사용하므로 파일을 수정하지 않는다. 출력이 있으면 Task 4를 시작하지 말고 설계와 현재 소스의 불일치를 메인 에이전트에게 보고한다.
 
-- [ ] **Step 6: Main 조립과 수명주기를 갱신한다**
+- [x] **Step 6: Main 조립과 수명주기를 갱신한다**
 
   `_Ready()`의 exact node lookup, controller 생성, surface Attach 순서를 추가한다. 실패 시 생성된 controller/surface를 역순 정리하고 `_ExitTree()`에서 event와 Godot signal을 모두 해제한다. 기존 Space `_Input`, playback `_Process`, projection 조립은 바꾸지 않는다.
 
-- [ ] **Step 7: skeleton과 Editor 회귀를 실행한다**
+- [x] **Step 7: skeleton과 Editor 회귀를 실행한다**
 
   Run: `dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo`
 
@@ -397,7 +397,7 @@ var result = _session.UpdateSelectedTransformKeyframe(
 
   Expected: Editor PASS, skeleton PASS.
 
-- [ ] **Step 8: 메인 에이전트가 Task 4를 검토·커밋·푸시한다**
+- [x] **Step 8: 메인 에이전트가 Task 4를 검토·커밋·푸시한다**
 
   Exact stage paths: 생성·수정된 여섯 파일.
 
@@ -421,7 +421,7 @@ var result = _session.UpdateSelectedTransformKeyframe(
 - Consumes: Task 1~4의 실제 UI signal과 세션/Domain 계약
 - Produces: exact `TIMELINE_KEYFRAME_CRUD_READY ...` marker, 사용자 가이드, 완료 roadmap
 
-- [ ] **Step 1: 실제 UI signal 기반 runtime RED를 추가한다**
+- [x] **Step 1: 실제 UI signal 기반 runtime RED를 추가한다**
 
   기존 runtime document와 실제 marker surface/controller를 사용해 다음 순서를 hand-derived 값으로 검증한다.
 
@@ -440,29 +440,29 @@ var result = _session.UpdateSelectedTransformKeyframe(
 TIMELINE_KEYFRAME_CRUD_READY add=1 update=1 time_move=1 delete=1 undo=1 redo=1 duplicate_reject=1 range_reject=1 min_keyframe_guard=1 stale_conflict=1 selection_sync=1 preview_cancel=1 playback_lock=1
 ```
 
-- [ ] **Step 2: runtime RED를 확인한다**
+- [x] **Step 2: runtime RED를 확인한다**
 
   Run: `& .\scripts\Test-GodotRuntime.ps1`
 
   Expected: FAIL — 새 marker 또는 assertion이 아직 충족되지 않음.
 
-- [ ] **Step 3: runtime probe를 최종 UI 계약에 맞게 완성한다**
+- [x] **Step 3: runtime probe를 최종 UI 계약에 맞게 완성한다**
 
   wait, sleep, `_Process` 횟수, process count, test-only production API, source-string assertion을 사용하지 않는다. slider/button/SpinBox/marker의 실제 signal과 `Viewport.PushInput`을 사용한다. 수치는 구현 결과에서 읽어 기대값으로 쓰지 않고 문서 fixture로부터 독립 계산한다.
 
-- [ ] **Step 4: runtime 스크립트 exact marker 검사를 갱신한다**
+- [x] **Step 4: runtime 스크립트 exact marker 검사를 갱신한다**
 
   기존 exact marker를 그대로 검사한 뒤 새 CRUD marker 한 줄을 exact match한다. build 경고/오류 0과 최종 `GODOT_RUNTIME_VERIFICATION=PASS`를 유지한다.
 
-- [ ] **Step 5: 한글 사용자·아키텍처 문서를 갱신한다**
+- [x] **Step 5: 한글 사용자·아키텍처 문서를 갱신한다**
 
   README에 marker click→Add→Time/pose Apply→Delete→Undo/Redo 흐름과 오류 문구를 기록한다. system/data/editor architecture에 Domain CRUD, preimage Command, 비영구 selection, marker layout 경계를 기록한다. roadmap의 “다음 구현 단위”를 완료 목록으로 옮기고 다음 단위를 Action/Lock-on track foundation으로 지정한다.
 
-- [ ] **Step 6: 계획 체크박스를 실제 완료 상태로 갱신한다**
+- [x] **Step 6: 계획 체크박스를 실제 완료 상태로 갱신한다**
 
   검증되지 않은 항목은 체크하지 않는다. 모든 Task review와 fresh verification이 끝난 뒤에만 이 계획의 남은 checkbox를 `[x]`로 바꾼다.
 
-- [ ] **Step 7: 전체 직렬 검증을 실행한다**
+- [x] **Step 7: 전체 직렬 검증을 실행한다**
 
   Run in order:
 
@@ -477,7 +477,7 @@ dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug 
 
   Expected: 모든 테스트 PASS, skeleton PASS, runtime exact marker PASS, Godot build 경고 0·오류 0.
 
-- [ ] **Step 8: 최종 diff와 Git 추적 범위를 검토한다**
+- [x] **Step 8: 최종 diff와 Git 추적 범위를 검토한다**
 
   `git diff --check`, `git status --short`, `git diff --stat`를 확인한다. `local-assets/`, `tools/`, `cache/`, `exports/`, `.godot/`, 로그와 임시 검토 파일은 추적하지 않는다.
 

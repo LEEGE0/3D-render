@@ -44,7 +44,7 @@ Godot 장면과 C# 스크립트로 창, 패널, 입력, 2D/3D 투영과 시각 �
 
 | 구성요소 | 책임 |
 | --- | --- |
-| `DocumentSession` | 열린 문서, 경로, 변경 여부, Undo/Redo 스택 관리 |
+| `DocumentSession` | 열린 문서, playback·비영구 선택·preview, 키프레임 CRUD 공개 API와 Undo/Redo 스택 관리 |
 | `CommandDispatcher` | 검증된 편집 명령의 실행·병합·되돌리기 |
 | `PlaybackClock` | 편집·재생·렌더 시간 모드와 현재 시간 제공 |
 | `SceneEvaluator` | 지정 시간의 모든 배우·행동·카메라 상태 계산 |
@@ -70,6 +70,35 @@ Godot 장면과 C# 스크립트로 창, 패널, 입력, 2D/3D 투영과 시각 �
 ```
 
 드래그 중 매 픽셀마다 영구 키프레임을 만들지 않는다. 임시 프리뷰를 표시하고 조작 종료 시 하나의 병합 가능한 명령으로 확정한다.
+
+### 변환 키프레임 CRUD
+
+```text
+타임라인 marker click
+→ DocumentSession.SelectTransformKeyframe(id)
+→ pause + 해당 time seek + 비영구 keyframe selection 변경
+→ Inspector/marker/두 view 재표시
+
+paused 시각의 Add
+→ 현재 SceneSnapshot에서 평가 pose 복사
+→ AddTransformKeyframeCommand
+→ SceneDocument.AddKeyframe 검증·revision 증가
+→ 새 marker selection + Undo 기록
+
+Time/pose Apply 또는 Delete
+→ UpdateTransformKeyframeCommand / RemoveTransformKeyframeCommand (정확한 preimage 보유)
+→ SceneDocument의 원자적 검증·변경
+→ DocumentChanged + HistoryChanged
+→ 동일 (revision,time) snapshot을 TopView/WorldView에 전달
+```
+
+Add command는 생성할 keyframe 자체를 postimage로 보관한다. Execute는 그 keyframe을 추가하고 Undo는 같은 ID·time·pose의 keyframe만 제거한다. Update command는 before와 after 전체 값을 보관해 Execute에서 before→after, Undo에서 after→before를 stale 검증한다. Delete command는 제거할 전체 keyframe preimage를 보관해 Execute에서 stale 검증하고 Undo에서 그 원본 marker를 다시 추가한다. 따라서 Update/Delete를 시작한 뒤 문서가 바뀌면 stale preimage가 실패하여 부분 변경이나 history 이동이 생기지 않으며, Add/Remove의 Domain 검증 실패도 Application에서는 `Conflict`로 변환되어 UI가 최신 상태를 유지한다.
+
+`SceneDocument` revision은 성공한 영구 Add/Update/Delete와 Undo/Redo에만 증가한다. marker 선택, playback seek/pause, disabled 버튼 클릭과 preview clear는 문서를 바꾸지 않는다. `HistoryChanged`는 성공한 stack 이동 뒤에만 일어나며, 재생 중 또는 선택 marker와 다른 시각에서는 UI가 Undo/Redo도 잠가 history 자체를 지우지 않는다.
+
+### 편집 가능성 경계
+
+`DocumentSession`이 selection, current time, playback state를 함께 검사한다. actor가 없으면 모든 CRUD가 잠기고, playback 중에는 모든 CRUD가 잠긴다. 정지 상태에서는 Add만 현재 시각에 transform marker가 없을 때 가능하다. Update는 선택 marker와 재생 헤드가 같은 시각일 때만 가능하고, Delete는 선택 marker가 있으며 actor에 transform marker가 둘 이상일 때만 가능하다. 이 정책은 Presentation의 `Disabled` 표시에만 의존하지 않는다. 남아 있던 Godot signal도 세션 API에서 다시 거부하므로 revision과 history가 불변이다.
 
 ### 재생
 

@@ -47,7 +47,7 @@ TopViewSurface / TransformInspectorController    TimelineController / Main Space
 - 마우스를 놓거나 Inspector에서 Apply/Enter를 제출할 때만 `ReplaceTransformCommand` 하나가 확정된다.
 - `DocumentSession.CommitPreviewDetailed()`는 확정 결과를 공개 `SceneEditResult`로 반환하며, 기존 `CommitPreview()` bool API는 호환성을 위해 유지되고 `Applied`일 때만 `true`를 반환한다.
 - `DocumentSession.CurrentRevision`은 `SceneDocument`를 UI에 노출하지 않고도 현재 monotonic revision을 읽게 한다. Inspector는 확정 전후 revision으로 문서 변경 후 알림 subscriber가 실패한 경우를 구분한다.
-- 현재 편집 대상은 선택 배우의 시간상 최초 변환 키프레임이다. 읽기 전용 타임라인 3A는 임의의 t=0 키프레임을 자동 생성하거나 재생 헤드 시각에 새 키프레임을 만들지 않는다.
+- 현재 편집 대상은 선택 배우의 현재 재생 헤드 시각에 있는 선택 transform keyframe이다. marker click은 pause·seek·선택을 함께 수행한다. Add는 현재 시각의 평가 pose를 새 keyframe으로 만들며, 임의의 t=0 keyframe을 자동 생성하지 않는다.
 - Undo/Redo는 과거 revision 번호를 복원하지 않고 과거 의미 값을 새 변경으로 적용하므로 revision은 항상 증가한다.
 - `HistoryChanged`는 성공한 Execute/Undo/Redo의 스택 이동이 끝난 뒤에만 발생한다. Inspector 버튼은 동기 `SceneDocument.Changed` 도중의 이전 stack 상태가 아니라 이 event에서 `CanUndo/CanRedo`를 읽는다.
 
@@ -67,6 +67,8 @@ InspectorPanel/TransformInspector
   └─ ErrorLabel
 TimelinePanel/TimelineControls
   ├─ PlaybackButtons/PlayPauseButton / StopButton
+  ├─ TransformTrackSurface
+  ├─ KeyframeToolbar/AddKeyframeButton / DeleteKeyframeButton
   ├─ TimeSlider
   ├─ CurrentTimeLabel
   └─ TimelineStatus
@@ -82,15 +84,14 @@ TimelinePanel/TimelineControls
 
 ## 선택 모델
 
-선택은 문서 내용이 아니라 세션 상태다. 현재 구현은 actor ID 하나 또는 null만 보관한다.
+선택은 문서 내용이 아니라 세션 상태다. 현재 구현은 actor ID 하나와 그 actor의 transform keyframe ID 하나(각각 null 가능)를 보관한다.
 
 - 선택 배우 ID
-- 선택 트랙 ID
-- 선택 키프레임 ID 집합
+- 선택 transform keyframe ID
 - 현재 시간
 - 활성 도구와 좌표 모드
 
-탑뷰에서 배우를 선택하면 속성 패널이 같은 ID를 사용한다. 3D actor 노드는 actor ID로만 매핑되며 화면 노드 참조를 선택의 원본으로 쓰지 않는다. 다중 선택과 트랙·키프레임 집합 선택은 후속 타임라인 단계다.
+탑뷰에서 배우를 선택하면 현재 time에 marker가 있으면 그 keyframe도 선택한다. `TransformTrackSurface` marker를 클릭하면 `SelectTransformKeyframe(id)`가 playback을 pause하고 해당 time으로 seek한 뒤 Inspector ID/time, selected marker ring과 두 view snapshot을 같은 세션 상태로 맞춘다. 3D actor 노드는 actor ID로만 매핑되며 화면 노드 참조를 선택의 원본으로 쓰지 않는다. 다중 선택과 track·keyframe 집합 선택은 후속 타임라인 단계다.
 
 ## 편집 도구
 
@@ -104,7 +105,7 @@ TimelinePanel/TimelineControls
 - 3D: 현재는 탑뷰·Inspector 결과를 표시하며 직접 지면 드래그와 축 기즈모는 후속 기능이다.
 - 숫자 입력: Inspector에서 X/Z ±1000, Y ±100 범위와 0.1 step으로 입력한다.
 - 그리드·정점 스냅은 후속 옵션이다.
-- 현재 시간에 키프레임을 만들지 않고 배우의 최초 키프레임을 편집한다. 자동 생성 정책은 타임라인 구현 때 결정한다.
+- 현재 재생 헤드 시각에 marker가 있으면 그 선택 keyframe을 편집하고, marker가 없으면 `키프레임 추가`가 현재 평가 pose로 하나를 만든다.
 
 ### 회전 도구
 
@@ -112,7 +113,16 @@ TimelinePanel/TimelineControls
 
 ### 키프레임 도구
 
-다음 구현 단위는 현재 평가값을 임의 시점 변환 키프레임으로 생성하고, 선택 키프레임을 조회·수정·삭제하는 CRUD다. 현재 3A에는 keyframe marker/track 편집 UI가 없고 기존 키프레임을 읽어 평가하기만 한다. 이후 선택 키프레임 이동·복제·보간 변경과, 여러 트랙을 함께 이동할 때 상대 시간 간격을 보존하는 기능을 확장한다.
+`TransformTrackSurface`는 selected actor의 transform keyframe만 마름모 marker로 그리는 Presentation surface다. `TransformTrackLayout`은 순수 C#에서 duration, surface width, horizontal padding, `(ID,time)`만 받아 marker의 X를 계산하고 hit-test한다. Godot `Control`, `DocumentSession`, selection, command, revision, drawing color나 node는 layout 경계 밖이다. duration이 0이면 marker는 padding에 놓고, hit-test가 겹치면 포인터에 더 가까운 marker, 동거리면 더 이른 time, 그 다음 ordinal ID를 선택한다. 이 결정성은 UI frame rate와 무관하다.
+
+surface는 marker 좌표를 문서 원본으로 쓰거나 marker drag로 시간을 바꾸지 않는다. left click hit만 `DocumentSession.SelectTransformKeyframe`으로 전달한다. time 이동은 Inspector `TimeInput`과 `변환 적용`으로 after keyframe을 만들 때 하나의 Update command로 확정한다.
+
+- `키프레임 추가`: 선택 actor가 있고 paused이며 현재 time에 marker가 없을 때만 활성화된다. 현재 평가 snapshot pose를 복사해 Add command 하나로 확정하고 새 marker를 선택한다.
+- `변환 적용`/Enter: 선택 marker와 playback time이 일치할 때만 활성화된다. Time/X/Y/Z/Yaw는 하나의 atomic Update command이고, 같은 시각 conflict·range·stale preimage는 commit하지 않는다.
+- `키프레임 삭제`: 선택 marker가 있고 paused이며 actor에 marker가 둘 이상일 때만 활성화된다. 성공 뒤 가까운 남은 marker를 선택한다.
+- 재생 중에는 CRUD와 Inspector Apply/Undo/Redo를 모두 잠근다. selection·scrub·preview 취소는 문서 mutation이 아니다.
+
+이후 선택 keyframe drag/복제·보간 변경, 여러 track 이동의 상대 time 보존, action/lock-on 구간 UI를 확장한다.
 
 ## 명령과 Undo/Redo
 
@@ -139,13 +149,15 @@ public enum SceneEditResult
 
 `Applied`는 문서와 history가 함께 갱신된 경우, `NoChange`는 Yaw 정규화를 포함해 의미 값이 같아 revision과 history가 바뀌지 않은 경우, `Conflict`는 preview가 잡은 preimage가 최신 문서와 달라 적용하지 않은 경우다. `CommitPreviewDetailed()`이 이 값을 반환하고 bool `CommitPreview()`는 `Applied`에 대한 호환 wrapper로만 남는다.
 
-`ReplaceTransformCommand`는 actor ID, keyframe ID, 실행 전 expected 값과 실행 후 값을 고정하며 다음 불변 조건을 지킨다.
+`ReplaceTransformCommand`는 기존 pose-only preview 확정용이다. CRUD에는 `AddTransformKeyframeCommand`, `UpdateTransformKeyframeCommand`, `RemoveTransformKeyframeCommand`가 actor ID와 immutable keyframe preimage를 고정하며 다음 불변 조건을 지킨다.
 
 - 실행 전 검증 실패는 문서를 부분 변경하지 않는다.
 - Undo는 실행 전 의미 상태로 정확히 돌아간다.
 - 드래그 중에는 문서를 바꾸지 않고 mouse release에서 하나의 명령만 만든다.
 - 가져오기는 새 문서 생성 또는 하나의 복합 명령으로 처리한다.
 - 재생 시간 변경과 패널 크기 같은 세션 상태는 문서 Undo에 넣지 않는다.
+
+Update는 Execute에서 before→after, Undo에서 after→before를 검증한다. Add Undo는 추가 keyframe을 정확히 제거하고, Delete Undo는 제거한 keyframe을 정확히 복원한다. Domain이 preimage 불일치, duplicate time 또는 마지막 keyframe 삭제를 거부하면 command는 history를 움직이지 않고 `Conflict`가 된다. `SceneEditResult.Applied`만 revision과 history를 바꾸고 `NoChange`은 값을 다시 쓰지 않는다.
 
 ## 탑뷰 표현
 
@@ -174,7 +186,7 @@ public enum SceneEditResult
 
 ## 타임라인 재생 상태와 투영 소유권
 
-완료된 단계 3A는 track 편집기가 아니라 읽기 전용 재생 헤드다. `SceneDocument`는 duration/FPS와 committed keyframe을 소유하고, `DocumentSession`은 해당 문서에서 만든 `PlaybackClock`을 세션 상태로 소유한다. 현재 시각과 재생 여부는 저장 문서, revision 또는 Undo/Redo history에 들어가지 않는다.
+완료된 3A는 읽기 전용 playback foundation이고, 그 위의 3B는 transform marker 선택과 CRUD를 추가한다. `SceneDocument`는 duration/FPS와 committed keyframe을 소유하고, `DocumentSession`은 해당 문서에서 만든 `PlaybackClock`·비영구 selection을 세션 상태로 소유한다. 현재 시각과 재생 여부는 저장 문서, revision 또는 Undo/Redo history에 들어가지 않는다.
 
 `TimelineController`는 Godot control을 Application 상태에 연결하는 adapter다.
 
@@ -188,23 +200,23 @@ public enum SceneEditResult
 
 시간 상태가 바뀌면 `DocumentSession`은 활성 `TransformPreview`를 clear한다. `TransformPreviewController`가 nullable preview를 두 consumer에 전달하므로 world는 마지막 committed 표시를 복원하고 top도 preview overlay를 제거한다. 이어 현재 `(revision,time)` snapshot이 두 view에 적용된다. seek 때문에 preview가 문서 mutation으로 오인되지 않으며 revision, 두 keyframe과 Undo/Redo stack은 그대로다.
 
-편집 가능 여부는 선택 actor, 재생 여부와 현재 time을 함께 본다. 재생 중에는 잠그고, paused여도 현재 time이 선택 actor의 최초 transform keyframe time과 다르면 잠근다. 잠금 전이는 진행 중인 TopView drag/Inspector preview를 취소하고 입력·Apply·Undo/Redo를 비활성화하며 이유를 `TimelineStatus`와 Inspector에 표시한다. Stop은 언제나 0초로 이동하지만 최초 keyframe도 0초인 문서에서만 편집 가능 상태가 함께 복원된다.
+편집 가능 여부는 선택 actor, selected marker, 재생 여부와 현재 time을 함께 본다. 재생 중에는 Update/Add/Delete와 Apply/Undo/Redo를 잠근다. paused여도 현재 time이 selected marker time과 다르면 Update를 잠그며, Add는 현재 time에 marker가 있을 때 잠기고 Delete는 selected marker가 없거나 마지막 marker일 때 잠긴다. 잠금 전이는 진행 중인 TopView drag/Inspector preview를 취소하고 입력·Apply·Undo/Redo를 비활성화하며 이유를 `TimelineStatus`와 Inspector에 표시한다. Stop은 언제나 0초로 이동하며, 0초 marker가 선택되면 그 marker의 편집 상태가 복원된다.
 
-후속 full timeline은 트랙 헤더, keyframe/행동 구간, 확대·스크롤·시간 스냅과 CRUD를 추가한다. 키프레임 drag 충돌 정책은 미리 보여주고 확정 시 하나의 명령으로 적용해야 한다. 현재 3A는 행동·락온 track 편집, 이동 궤적, 실제 DSR animation, render 실행이나 gamepad 입력을 구현한 단계가 아니다.
+후속 full timeline은 action/lock-on track, 구간, 확대·스크롤·시간 스냅을 추가한다. 선택 keyframe drag 충돌 정책은 미리 보여주고 확정 시 하나의 명령으로 적용해야 한다. 현재 단계는 행동·락온 track 편집, 이동 궤적, 실제 DSR animation, render 실행이나 gamepad 입력을 구현한 단계가 아니다.
 
 ## 속성 패널
 
-현재 `TransformInspectorController`는 선택 배우의 최초 X/Y/Z/Yaw만 편집한다. 선택 event, 문서 변경 event, preview event와 edit-availability event를 구독하고 종료 시 모두 해제한다. 내부 값 반영 중 `ValueChanged`가 다시 미리보기를 만들지 않도록 guard를 사용한다. 입력값은 다음 세 단계로 처리한다.
+현재 `TransformInspectorController`는 선택한 transform keyframe의 Time/X/Y/Z/Yaw를 편집한다. 선택 event, keyframe selection event, 문서 변경 event, preview event와 edit-availability event를 구독하고 종료 시 모두 해제한다. 내부 값 반영 중 `ValueChanged`가 다시 미리보기를 만들지 않도록 guard를 사용한다. 입력값은 다음 세 단계로 처리한다.
 
 1. 텍스트를 임시 입력 상태로 유지한다.
-2. 숫자 범위·참조·시간 충돌을 검증한다.
+2. time 문서 범위, 좌표 범위, 선택·재생 잠금과 같은 time 충돌을 검증한다.
 3. 유효할 때 Apply 버튼 또는 SpinBox 내부 LineEdit의 Enter 제출로 명령 하나를 확정한다.
 
 입력 중인 `-`, 빈 문자열을 즉시 0으로 바꿔 사용자의 편집을 방해하지 않는다.
 
-선택 없음, stale actor, 유한하지 않은 값, 범위 초과와 Undo/Redo 충돌은 `ErrorLabel`에 한글로 표시하고 문서는 바꾸지 않는다. Apply/Enter는 `NoChange`에 `적용할 실제 변환 변경이 없습니다.`, `Conflict`에 `선택한 배우의 변경이 오래되어 최신 문서 상태와 충돌했습니다.`를 표시한다. 확정 호출이 예외를 던져도 `CurrentRevision`이 증가했다면 문서 mutation과 history 전이는 완료된 것이므로 `변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다.`로 안내해 적용 실패로 잘못 표시하지 않는다. SpinBox는 범위 밖 텍스트를 일단 받아 controller가 X/Z ±1000·Y ±100 위반을 명시적으로 거부하게 하며, 자동 clamp된 값으로 preview나 commit을 시작하지 않는다. 유효 값으로 시작된 preview 도중 범위 오류가 생기면 guarded clear로 top/world preview만 취소한다. `PreviewChanged(null)`이 invalid SpinBox 값과 ErrorLabel을 committed 값으로 덮어쓰지 않으며, invalid 상태의 Apply/Enter도 preview를 다시 만들지 않는다. Undo/Redo 버튼은 활성 preview를 먼저 취소한다. 선택 유형별 Inspector 전환은 후속 기능이다.
+선택 없음, stale actor, 유한하지 않은 값, 범위 초과와 Undo/Redo 충돌은 `ErrorLabel`에 한글로 표시하고 문서는 바꾸지 않는다. Apply/Enter는 `NoChange`에 `적용할 실제 변환 변경이 없습니다.`, `Conflict`에 `선택한 키프레임의 변경이 오래되었거나 같은 시각의 키프레임과 충돌했습니다.`를 표시한다. 확정 호출이 예외를 던져도 `CurrentRevision`이 증가했다면 문서 mutation과 history 전이는 완료된 것이므로 `변경은 저장되었지만 화면 표시 알림 처리에 실패했습니다.`로 안내해 적용 실패로 잘못 표시하지 않는다. SpinBox는 범위 밖 텍스트를 일단 받아 controller가 time 0~문서 길이, X/Z ±1000·Y ±100 위반을 명시적으로 거부하게 하며, 자동 clamp된 값으로 preview나 commit을 시작하지 않는다. 유효 값으로 시작된 preview 도중 범위 오류가 생기면 guarded clear로 top/world preview만 취소한다. `PreviewChanged(null)`이 invalid SpinBox 값과 ErrorLabel을 committed 값으로 덮어쓰지 않으며, invalid 상태의 Apply/Enter도 preview를 다시 만들지 않는다. Undo/Redo 버튼은 활성 preview를 먼저 취소한다. 선택 유형별 Inspector 전환은 후속 기능이다.
 
-재생 중이거나 최초 keyframe 이외의 시각이면 네 SpinBox와 Apply를 비활성화하고 Undo/Redo도 잠근다. 프로그래밍 방식 signal이나 남아 있던 입력이 들어와도 controller가 `CanEditSelectedTransform`을 다시 확인해 committed 최초 keyframe 값을 복원하고 잠금 이유를 보여준다. 이 UI 잠금은 history를 삭제하는 기능이 아니므로 Stop 등으로 편집 가능한 최초 시각에 돌아오면 기존 `CanUndo/CanRedo`에 맞게 버튼 상태가 복원된다.
+재생 중이거나 selected marker와 다른 시각이면 Time 포함 다섯 SpinBox와 Apply를 비활성화하고 Undo/Redo도 잠근다. 프로그래밍 방식 signal이나 남아 있던 입력이 들어와도 controller가 `CanEditSelectedTransform`을 다시 확인해 committed selected keyframe 값을 복원하고 잠금 이유를 보여준다. 이 UI 잠금은 history를 삭제하는 기능이 아니므로 marker를 선택해 편집 가능한 시각으로 돌아오면 기존 `CanUndo/CanRedo`에 맞게 버튼 상태가 복원된다.
 
 ## 기본 편집 런타임 통합 검사
 
@@ -243,13 +255,31 @@ BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=
 TIMELINE_PLAYBACK_READY scrub_midpoint=1 top_world_sync=1 revision_unchanged=1 history_unchanged=1 preview_cancel=1 edit_guard=1 play_button=1 space_toggle=1 end_clamp=1 stop_restore=1
 ```
 
+## 변환 키프레임 CRUD 런타임 통합 검사
+
+CRUD probe는 source 문자열이나 test-only API가 아니라 실제 `TransformTrackSurface` click, Add/Delete/Undo/Redo button signal, Inspector `SpinBox`와 Apply signal을 사용한다. fixture의 t=0 `(1,0,0), 0°`, t=1 `(5,2,-4), 90°`에서 독립 계산한 t=0.5 pose `(3,1,-2), 45°`를 기준으로 다음 계약을 확인한다.
+
+1. t=0.5 scrub 뒤 Add가 평가 pose를 가진 marker 하나를 만들고 selection·Inspector ID/time·TopView/WorldView snapshot을 동기화한다.
+2. 실제 marker click이 pause·seek·selection을 동기화한다.
+3. Inspector Time=0.6, pose `(3.5,1.5,-2.5)`, Yaw=60° Apply가 하나의 atomic update로 marker 위치와 committed pose를 함께 바꾼다.
+4. 실제 Undo/Redo 버튼이 time·pose·selection/history를 command 단위로 왕복한다.
+5. Delete, Undo 복원, Redo 재삭제가 selection의 가장 가까운 marker 규칙과 최소 한 marker 규칙을 깨지 않는다.
+6. duplicate Add, 범위 밖 time, 마지막 marker Delete와 stale preimage가 revision/history/최신 committed data를 바꾸지 않는다.
+7. active preview 뒤 scrub이 preview만 취소하고, 재생 중 CRUD·Inspector·TopView transform edit가 잠겨 있는 동안 revision/history가 불변이다.
+
+모든 assertion 뒤에만 다음 exact marker가 출력된다.
+
+```text
+TIMELINE_KEYFRAME_CRUD_READY add=1 update=1 time_move=1 delete=1 undo=1 redo=1 duplicate_reject=1 range_reject=1 min_keyframe_guard=1 stale_conflict=1 selection_sync=1 preview_cancel=1 playback_lock=1
+```
+
 ## 재생 모드와 편집 모드
 
-- 최초 keyframe 시각의 정지 편집: 선택 actor의 최초 transform 편집 가능
-- 다른 시각의 정지 상태: 지정 시간을 읽기 전용 평가하고 transform 편집 잠금
+- marker 시각의 정지 편집: 선택 actor의 selected transform keyframe 편집 가능
+- marker 없는 다른 시각의 정지 상태: 지정 시간을 읽기 전용 평가하고 Add만 가능, transform Update/Delete는 잠금
 - 실시간 재생: 문서 변경 잠금, `PlaybackClock` 시간 전진과 두 view 평가
 - 스크럽: 먼저 pause하고 지정 시간 즉시 평가
-- Stop: 0초 paused로 복귀; 최초 keyframe 시각도 0초일 때 편집 잠금 해제
+- Stop: 0초 paused로 복귀; 0초 marker가 있으면 그 marker를 선택해 편집 상태 복원
 - 렌더(후속): 결정적 시간 샘플을 사용하고 문서를 읽기 전용 스냅샷으로 고정
 
 렌더 중 원본 문서를 수정할 수 있게 하더라도 현재 렌더는 시작 시점 스냅샷만 사용한다.

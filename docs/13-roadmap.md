@@ -57,7 +57,7 @@ Windows 11에서 오프라인으로 메인 창이 열리고 헤드리스 검증�
 - 3D 직접 피킹과 축 기즈모
 - 키보드 단축키와 패널 상태 저장
 
-읽기 전용 시간 스크럽·재생은 단계 3A에서 완료했다. 현재 영구 편집은 원본 시간 구조를 조용히 바꾸지 않도록 각 배우의 시간상 최초 변환 키프레임만 대상으로 하며, 임의 시점 키프레임 생성·수정·삭제는 다음 구현 단위다.
+읽기 전용 시간 스크럽·재생은 단계 3A에서, 임의 시점 변환 키프레임 CRUD는 단계 3B에서 완료했다. transform keyframe은 marker click으로 선택하고, 현재 정지 시각에서 평가 pose를 Add한 뒤 Time/pose Apply와 Delete를 command history로 Undo/Redo할 수 있다.
 
 ### 완료 기준
 
@@ -77,21 +77,31 @@ Windows 11에서 오프라인으로 메인 창이 열리고 헤드리스 검증�
 
 3A는 기존 transform keyframe을 평가하는 read-only playback foundation이다. track/keyframe 편집 UI, 행동·락온 track, 이동 궤적, 실제 DSR animation playback, render 실행과 gamepad 조작까지 완료했다는 의미가 아니다.
 
-### 다음 구현 단위 — 임의 시점 변환 키프레임 CRUD
+### 완료된 단계 3B — 변환 키프레임 CRUD
 
-- 선택 actor와 현재 paused time을 기준으로 transform keyframe 생성
-- keyframe ID/time/position/yaw 조회와 선택 상태
-- 선택 keyframe의 transform/time 수정 및 충돌 검증
-- keyframe 삭제와 최소 한 개 transform 유지 정책
-- 생성·수정·삭제 각각의 원자적 command, Undo/Redo와 revision/event 계약
-- 같은 시각 중복, 문서 범위 밖 시간, 재생 중 편집과 stale preimage 거부
-- track marker/Inspector/두 view의 선택·평가 동기화와 결정적 런타임 검증
+- [x] paused 재생 헤드 시각의 평가 pose를 사용하는 transform keyframe Add와 결정적 ID 생성
+- [x] marker click의 pause·seek·keyframe selection, Inspector ID/time와 TopView/WorldView 동기화
+- [x] Time/X/Y/Z/Yaw의 원자적 Update와 marker time 이동
+- [x] Delete 뒤 가장 가까운 남은 marker 선택, 배우당 최소 한 transform keyframe 유지
+- [x] Add/Update/Delete preimage command, Undo/Redo, monotonic revision과 history/event 계약
+- [x] 같은 시각 duplicate, 문서 범위 밖 time, playback lock, 마지막 marker, stale preimage 거부
+- [x] 실제 Godot marker/button/SpinBox signal을 사용하는 결정적 CRUD runtime marker
 
-이 CRUD가 들어오기 전에는 slider가 가리키는 임의 시각에서 Inspector 값을 확정하거나 키프레임을 자동 생성하지 않는다.
+selection, playback time, preview와 history stack은 저장되는 `SceneDocument` 데이터가 아니라 세션 상태다. marker 선택·scrub·pause는 revision을 만들지 않으며, 성공한 Add/Update/Delete/Undo/Redo만 문서와 history를 바꾼다.
+
+### 다음 구현 단위 — Action/Lock-on track foundation
+
+- 행동과 락온의 ID·time 기반 selection 및 read model
+- action keyframe/구간과 lock-on enabled·target·tracking mode의 Domain command 경계
+- marker/구간 layout, hit-test와 Inspector 편집 surface의 순수 계산 경계
+- transform track과 독립된 selection·preview·playback lock 정책, Undo/Redo와 stale preimage 검증
+- 지정 시각에서 action·lock-on 단계 상태를 평가해 TopView/3D 교육 overlay에 전달하는 foundation
+
+이 단위는 transform CRUD의 시간·selection·command 계약을 재사용하되, 실제 DSR animation 연결이나 최종 combat rule 판정을 선행 완료로 주장하지 않는다.
 
 ### 단계 3 후속 작업
 
-- 행동·락온 트랙과 구간 편집
+- Action/Lock-on track foundation과 구간 편집
 - 최단 회전과 단계 상태 평가
 - 락온 대상과 연속 방향 계산
 - 이동 궤적
@@ -99,7 +109,7 @@ Windows 11에서 오프라인으로 메인 창이 열리고 헤드리스 검증�
 
 ### 완료 기준
 
-단계 3 전체 완료 기준은 네 캐릭터 장면을 60FPS 목표로 재생하고, transform CRUD를 Undo/Redo할 수 있으며, 락온 이동과 자유 방향 이동이 예상대로 다르게 동작하는 것이다. 현재 3A는 이 기준 중 읽기 전용 시간 평가와 재생 기반만 완료했다.
+단계 3 전체 완료 기준은 네 캐릭터 장면을 60FPS 목표로 재생하고, transform CRUD를 Undo/Redo할 수 있으며, 락온 이동과 자유 방향 이동이 예상대로 다르게 동작하는 것이다. 현재 3A/3B는 이 기준 중 시간 평가·재생과 transform CRUD까지 완료했으며, Action/Lock-on track foundation이 다음 범위다.
 
 ## 단계 4 — 가이드 가져오기와 저장
 
