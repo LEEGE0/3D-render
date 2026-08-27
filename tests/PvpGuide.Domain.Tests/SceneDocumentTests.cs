@@ -207,4 +207,181 @@ public sealed class SceneDocumentTests
         Assert.Equal(2, notifications);
         Assert.Equal([2d, 6d], document.Actors[0].Keyframes.Select(keyframe => keyframe.TimeSeconds));
     }
+
+    [Fact]
+    public void ReplaceTransformKeyframe_changes_pose_once_and_preserves_track_meaning()
+    {
+        var document = CreateEditableDocument();
+        var before = document.GetTransformKeyframe("host", "host-first");
+        var after = new TransformKeyframe(before.Id, before.TimeSeconds, new Position3(4, 2, 6), 90);
+        var notifications = 0;
+        document.Changed += (_, _) => notifications++;
+
+        var changed = document.ReplaceTransformKeyframe("host", before, after);
+
+        Assert.True(changed);
+        Assert.Equal(1, document.Revision);
+        Assert.Equal(1, notifications);
+        Assert.Equal(after.Position, document.CreateSnapshot(before.TimeSeconds).ActorTransforms["host"].Position);
+        Assert.Equal(90, document.CreateSnapshot(before.TimeSeconds).ActorTransforms["host"].YawDegrees);
+        var host = document.Actors.Single(a => a.ActorId == "host");
+        Assert.Equal("Host", host.DisplayName);
+        Assert.Equal("Hero", host.Role);
+        Assert.Equal(["idle"], host.ActionKeyframes.Select(k => k.ActionKey));
+        Assert.Equal(["host-lock"], host.LockOnKeyframes.Select(k => k.Id));
+        Assert.Equal(["host-second"], host.TransformKeyframes.Where(k => k.Id != after.Id).Select(k => k.Id));
+        Assert.Equal("target", document.Actors.Single(a => a.ActorId == "target").ActorId);
+    }
+
+    [Fact]
+    public void ReplaceTransformKeyframe_same_value_is_a_no_op()
+    {
+        var document = CreateEditableDocument();
+        var beforeActors = document.Actors.ToArray();
+        var before = document.GetTransformKeyframe("host", "host-first");
+        var notifications = 0;
+        document.Changed += (_, _) => notifications++;
+
+        var changed = document.ReplaceTransformKeyframe(
+            "host",
+            before,
+            new TransformKeyframe(before.Id, before.TimeSeconds, before.Position, before.YawDegrees + 360));
+
+        Assert.False(changed);
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, notifications);
+        Assert.Equal(beforeActors, document.Actors);
+        Assert.Equal(before, document.GetTransformKeyframe("host", "host-first"));
+    }
+
+    [Fact]
+    public void ReplaceTransformKeyframe_rejects_missing_actor_without_mutation()
+    {
+        var document = CreateEditableDocument();
+        var beforeActors = document.Actors.ToArray();
+        var before = document.GetTransformKeyframe("host", "host-first");
+        var expected = new TransformKeyframe("missing", 0, new Position3(0, 0, 0), 0);
+        var notifications = 0;
+        document.Changed += (_, _) => notifications++;
+
+        Assert.Throws<ArgumentException>(() => document.ReplaceTransformKeyframe(
+            "missing-actor", expected, expected));
+
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, notifications);
+        Assert.Equal(beforeActors, document.Actors);
+        Assert.Equal(before, document.GetTransformKeyframe("host", "host-first"));
+    }
+
+    [Fact]
+    public void ReplaceTransformKeyframe_rejects_missing_keyframe_without_mutation()
+    {
+        var document = CreateEditableDocument();
+        var beforeActors = document.Actors.ToArray();
+        var expected = new TransformKeyframe("missing", 0, new Position3(0, 0, 0), 0);
+        var before = document.GetTransformKeyframe("host", "host-first");
+        var notifications = 0;
+        document.Changed += (_, _) => notifications++;
+
+        Assert.Throws<ArgumentException>(() => document.ReplaceTransformKeyframe("host", expected, expected));
+
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, notifications);
+        Assert.Equal(beforeActors, document.Actors);
+        Assert.Equal(before, document.GetTransformKeyframe("host", "host-first"));
+    }
+
+    [Fact]
+    public void ReplaceTransformKeyframe_rejects_stale_expected_without_mutation()
+    {
+        var document = CreateEditableDocument();
+        var beforeActors = document.Actors.ToArray();
+        var current = document.GetTransformKeyframe("host", "host-first");
+        var stalePosition = new TransformKeyframe(current.Id, current.TimeSeconds, new Position3(9, 2, 6), current.YawDegrees);
+        var staleYaw = new TransformKeyframe(current.Id, current.TimeSeconds, current.Position, current.YawDegrees + 45);
+        var replacement = new TransformKeyframe(current.Id, current.TimeSeconds, new Position3(4, 2, 6), 90);
+        var notifications = 0;
+        document.Changed += (_, _) => notifications++;
+
+        Assert.Throws<InvalidOperationException>(() => document.ReplaceTransformKeyframe("host", stalePosition, replacement));
+        Assert.Throws<InvalidOperationException>(() => document.ReplaceTransformKeyframe("host", staleYaw, replacement));
+
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, notifications);
+        Assert.Equal(beforeActors, document.Actors);
+        Assert.Equal(current, document.GetTransformKeyframe("host", "host-first"));
+    }
+
+    [Fact]
+    public void ReplaceTransformKeyframe_rejects_changed_identity_or_time_without_mutation()
+    {
+        var document = CreateEditableDocument();
+        var beforeActors = document.Actors.ToArray();
+        var current = document.GetTransformKeyframe("host", "host-first");
+        var changedId = new TransformKeyframe("new-id", current.TimeSeconds, new Position3(4, 2, 6), 90);
+        var changedTime = new TransformKeyframe(current.Id, current.TimeSeconds + 1, new Position3(4, 2, 6), 90);
+        var notifications = 0;
+        document.Changed += (_, _) => notifications++;
+
+        Assert.Throws<ArgumentException>(() => document.ReplaceTransformKeyframe("host", current, changedId));
+        Assert.Throws<ArgumentException>(() => document.ReplaceTransformKeyframe("host", current, changedTime));
+
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, notifications);
+        Assert.Equal(beforeActors, document.Actors);
+        Assert.Equal(current, document.GetTransformKeyframe("host", "host-first"));
+    }
+
+    [Fact]
+    public void ActorTrack_rejects_duplicate_ids_within_each_track_but_allows_ids_across_track_types()
+    {
+        Assert.Throws<ArgumentException>(() => new ActorTrack(
+            "actor", "Actor", "Role",
+            [
+                new TransformKeyframe("same", 0, new Position3(0, 0, 0), 0),
+                new TransformKeyframe("same", 1, new Position3(1, 0, 0), 0),
+            ], [], []));
+        Assert.Throws<ArgumentException>(() => new ActorTrack(
+            "actor", "Actor", "Role", [new TransformKeyframe("transform", 0, new Position3(0, 0, 0), 0)],
+            [new ActionKeyframe("same", 0, "idle"), new ActionKeyframe("same", 1, "walk")], []));
+        Assert.Throws<ArgumentException>(() => new ActorTrack(
+            "actor", "Actor", "Role", [new TransformKeyframe("transform", 0, new Position3(0, 0, 0), 0)], [],
+            [new LockOnKeyframe("same", 0, false, null), new LockOnKeyframe("same", 1, false, null)]));
+
+        var allowed = new ActorTrack(
+            "actor", "Actor", "Role",
+            [new TransformKeyframe("same", 0, new Position3(0, 0, 0), 0)],
+            [new ActionKeyframe("same", 1, "idle")],
+            [new LockOnKeyframe("same", 2, false, null)]);
+        Assert.Equal("same", allowed.TransformKeyframes[0].Id);
+        Assert.Equal("same", allowed.ActionKeyframes[0].Id);
+        Assert.Equal("same", allowed.LockOnKeyframes[0].Id);
+    }
+
+    private static SceneDocument CreateEditableDocument()
+    {
+        return SceneDocument.Create(
+            "document-1",
+            "Editable",
+            null,
+            10,
+            30,
+            [
+                new ActorTrack(
+                    "host",
+                    "Host",
+                    "Hero",
+                    [
+                        new TransformKeyframe("host-first", 1, new Position3(1, 2, 3), 10),
+                        new TransformKeyframe("host-second", 4, new Position3(2, 3, 4), 20),
+                    ],
+                    [new ActionKeyframe("host-action", 1, "idle")],
+                    [new LockOnKeyframe("host-lock", 2, false, null)]),
+                new ActorTrack(
+                    "target",
+                    "Target",
+                    "Enemy",
+                    [new TransformKeyframe("target-first", 1, new Position3(7, 0, 8), 180)], [], [])
+            ]);
+    }
 }

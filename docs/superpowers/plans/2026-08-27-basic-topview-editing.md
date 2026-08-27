@@ -37,7 +37,7 @@
 - Consumes: `ActorTrack`, `TransformKeyframe`, `SceneDocument.Revision`, `SceneDocument.Changed`
 - Produces: `ActorTrack.GetTransformKeyframe`, `ActorTrack.ReplaceTransformKeyframe`, `SceneDocument.GetTransformKeyframe`, `SceneDocument.ReplaceTransformKeyframe`
 
-- [ ] **Step 1: 성공·no-op·실패 원자성 테스트를 먼저 작성한다**
+- [x] **Step 1: 성공·no-op·실패 원자성 테스트를 먼저 작성한다**
 
   `SceneDocumentTests.cs`에 다음 실제 행동 테스트를 추가한다.
 
@@ -64,7 +64,7 @@
 
   별도 Theory/Fact로 missing actor, missing keyframe, stale expected position/yaw, changed ID, changed time을 검사한다. 각 실패에서 actor 목록·키프레임 값·revision·notification이 그대로인지 단언한다. 같은 값을 교체하면 `false`, revision 0, notification 0인지 검사한다.
 
-- [ ] **Step 2: Domain 테스트를 실행해 정확한 RED를 확인한다**
+- [x] **Step 2: Domain 테스트를 실행해 정확한 RED를 확인한다**
 
   Run:
 
@@ -75,7 +75,7 @@
 
   Expected: 새 메서드가 없어서 컴파일 실패하거나 새 행동 테스트가 실패한다. 기존 테스트 실패나 테스트 0개는 올바른 RED가 아니다.
 
-- [ ] **Step 3: ActorTrack의 불변 교체를 최소 구현한다**
+- [x] **Step 3: ActorTrack의 불변 교체를 최소 구현한다**
 
   `ActorTrack.cs`에 다음 계약을 구현한다.
 
@@ -116,7 +116,7 @@
 
   비교는 ID, exact `TimeSeconds`, `Position3`, normalized `YawDegrees` 모두 사용한다. keyframe ID가 actor track 안에서도 고유하도록 생성자 검증을 추가하고 중복 ID 테스트를 작성한다.
 
-- [ ] **Step 4: SceneDocument의 검증 후 교체·event 원자성을 구현한다**
+- [x] **Step 4: SceneDocument의 검증 후 교체·event 원자성을 구현한다**
 
   `SceneDocument`는 actor를 찾고 current preimage를 확인한 뒤 새 track을 완성한다. 동일 replacement면 `false`를 반환한다. 새 track 완성 전에는 dictionary/list/revision을 바꾸지 않는다.
 
@@ -142,7 +142,7 @@
   }
   ```
 
-- [ ] **Step 5: Domain 전체 테스트와 정적 경계를 검증한다**
+- [x] **Step 5: Domain 전체 테스트와 정적 경계를 검증한다**
 
   Run:
 
@@ -154,7 +154,7 @@
 
   Expected: Domain 테스트 실패 0개, 금지 의존성 검색 결과 0개.
 
-- [ ] **Step 6: fresh 리뷰 후 메인이 Task 1만 커밋·푸시한다**
+- [x] **Step 6: fresh 리뷰 후 메인이 Task 1만 커밋·푸시한다**
 
   리뷰는 identity/time 보존, duplicate ID, stale expected, no-op, 다른 track 보존, 실패 원자성을 확인한다. Critical/Important를 수정하고 fresh 재리뷰가 깨끗할 때 메인이 다음 경로만 스테이징한다.
 
@@ -483,7 +483,7 @@
 
   `Main.tscn`에 설계 문서의 `TopViewSurface`, `WorldViewportContainer/WorldViewport/WorldRoot/Camera3D/DirectionalLight3D/Ground/Actors`, Inspector label·SpinBox 4개·Apply/Undo/Redo button을 정확한 이름으로 추가한다.
 
-  `TransformInspectorController`는 selection event와 committed/preview 값을 입력에 반영한다. X/Z 범위 ±1000, Y ±100, step 0.1, Yaw 입력은 확정 시 `[0,360)`로 정규화한다. Apply는 `SetSelectedActorTransform`, Undo/Redo 버튼은 session 메서드만 호출한다. 선택 없음·stale actor·범위 오류는 ErrorLabel에 한글로 표시하고 문서를 바꾸지 않는다.
+  `TransformInspectorController`는 selection event와 committed/preview 값을 입력에 반영한다. X/Z 범위 ±1000, Y ±100, step 0.1, Yaw 입력은 확정 시 `[0,360)`로 정규화한다. 내부 반영 중 `ValueChanged` 재진입을 막는 guard를 두고, 사용자 값 변경은 preview를 시작·갱신한다. Apply 버튼 또는 각 SpinBox 내부 LineEdit의 Enter 제출은 preview를 명령 하나로 확정한다. Undo/Redo는 활성 preview를 취소한 뒤 session 메서드를 호출한다. 선택 없음·stale actor·범위 오류는 ErrorLabel에 한글로 표시하고 문서를 바꾸지 않는다.
 
 - [ ] **Step 5: Main 조립과 exact runtime smoke를 구현한다**
 

@@ -29,9 +29,9 @@ public sealed class ActorTrack
         ArgumentNullException.ThrowIfNull(actionKeyframes);
         ArgumentNullException.ThrowIfNull(lockOnKeyframes);
 
-        var copiedTransforms = CopySortedUnique(transformKeyframes, static frame => frame.TimeSeconds, nameof(transformKeyframes));
-        var copiedActions = CopySortedUnique(actionKeyframes, static frame => frame.TimeSeconds, nameof(actionKeyframes));
-        var copiedLockOns = CopySortedUnique(lockOnKeyframes, static frame => frame.TimeSeconds, nameof(lockOnKeyframes));
+        var copiedTransforms = CopySortedUnique(transformKeyframes, static frame => frame.TimeSeconds, static frame => frame.Id, nameof(transformKeyframes));
+        var copiedActions = CopySortedUnique(actionKeyframes, static frame => frame.TimeSeconds, static frame => frame.Id, nameof(actionKeyframes));
+        var copiedLockOns = CopySortedUnique(lockOnKeyframes, static frame => frame.TimeSeconds, static frame => frame.Id, nameof(lockOnKeyframes));
 
         ActorId = actorId;
         DisplayName = displayName;
@@ -54,6 +54,39 @@ public sealed class ActorTrack
     public IReadOnlyList<LockOnKeyframe> LockOnKeyframes => _lockOnKeyframes;
 
     public IReadOnlyList<TransformKeyframe> Keyframes => _transformKeyframes;
+
+    public TransformKeyframe GetTransformKeyframe(string keyframeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
+        return _transformKeyframes.SingleOrDefault(frame => frame.Id == keyframeId)
+            ?? throw new ArgumentException($"Transform keyframe '{keyframeId}' does not exist.", nameof(keyframeId));
+    }
+
+    public ActorTrack ReplaceTransformKeyframe(
+        TransformKeyframe expectedCurrent,
+        TransformKeyframe replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (replacement.Id != expectedCurrent.Id || replacement.TimeSeconds != expectedCurrent.TimeSeconds)
+        {
+            throw new ArgumentException("Replacement identity and time must remain unchanged.", nameof(replacement));
+        }
+
+        var current = GetTransformKeyframe(expectedCurrent.Id);
+        if (!SameTransform(current, expectedCurrent))
+        {
+            throw new InvalidOperationException("The transform keyframe changed after the edit began.");
+        }
+
+        return new ActorTrack(
+            ActorId,
+            DisplayName,
+            Role,
+            _transformKeyframes.Select(frame => frame.Id == current.Id ? replacement : frame),
+            _actionKeyframes,
+            _lockOnKeyframes);
+    }
 
     public EvaluatedTransform Evaluate(double timeSeconds)
     {
@@ -92,7 +125,11 @@ public sealed class ActorTrack
     private static EvaluatedTransform ToTransform(TransformKeyframe keyframe) =>
         new(keyframe.Position, keyframe.YawDegrees);
 
-    private static T[] CopySortedUnique<T>(IEnumerable<T> source, Func<T, double> getTime, string parameterName)
+    private static T[] CopySortedUnique<T>(
+        IEnumerable<T> source,
+        Func<T, double> getTime,
+        Func<T, string> getId,
+        string parameterName)
     {
         var copied = source.ToArray();
         if (copied.Any(item => item is null))
@@ -109,8 +146,23 @@ public sealed class ActorTrack
             }
         }
 
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var keyframe in copied)
+        {
+            if (!ids.Add(getId(keyframe)))
+            {
+                throw new ArgumentException("Keyframe IDs must be unique within a track.", parameterName);
+            }
+        }
+
         return copied;
     }
+
+    private static bool SameTransform(TransformKeyframe left, TransformKeyframe right) =>
+        left.Id == right.Id &&
+        left.TimeSeconds == right.TimeSeconds &&
+        left.Position == right.Position &&
+        TransformKeyframe.NormalizeYaw(left.YawDegrees) == TransformKeyframe.NormalizeYaw(right.YawDegrees);
 
     private static EvaluatedTransform Interpolate(
         TransformKeyframe left,

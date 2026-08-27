@@ -148,6 +148,35 @@ public sealed class SceneDocument : ISceneSnapshotSource
         RaiseChanged();
     }
 
+    public TransformKeyframe GetTransformKeyframe(string actorId, string keyframeId)
+    {
+        var actor = GetRequiredActor(actorId);
+        return actor.GetTransformKeyframe(keyframeId);
+    }
+
+    public bool ReplaceTransformKeyframe(
+        string actorId,
+        TransformKeyframe expectedCurrent,
+        TransformKeyframe replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+        ArgumentNullException.ThrowIfNull(replacement);
+
+        var actor = GetRequiredActor(actorId);
+        var current = actor.GetTransformKeyframe(expectedCurrent.Id);
+        ValidateExpected(current, expectedCurrent);
+        if (SameTransform(current, replacement))
+        {
+            return false;
+        }
+
+        var updated = actor.ReplaceTransformKeyframe(expectedCurrent, replacement);
+        _actorsById[actorId] = updated;
+        _actors[_actors.IndexOf(actor)] = updated;
+        RaiseChanged();
+        return true;
+    }
+
     public SceneSnapshot CreateSnapshot(double timeSeconds)
     {
         EnsureTimeWithinDocument(timeSeconds, nameof(timeSeconds));
@@ -168,6 +197,28 @@ public sealed class SceneDocument : ISceneSnapshotSource
             throw new ArgumentOutOfRangeException(parameterName, "Time must be finite and within the document duration.");
         }
     }
+
+    private ActorTrack GetRequiredActor(string actorId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        return _actorsById.TryGetValue(actorId, out var actor)
+            ? actor
+            : throw new ArgumentException($"Actor '{actorId}' does not exist.", nameof(actorId));
+    }
+
+    private static void ValidateExpected(TransformKeyframe current, TransformKeyframe expected)
+    {
+        if (!SameTransform(current, expected))
+        {
+            throw new InvalidOperationException("The transform keyframe changed after the edit began.");
+        }
+    }
+
+    private static bool SameTransform(TransformKeyframe left, TransformKeyframe right) =>
+        left.Id == right.Id &&
+        left.TimeSeconds == right.TimeSeconds &&
+        left.Position == right.Position &&
+        TransformKeyframe.NormalizeYaw(left.YawDegrees) == TransformKeyframe.NormalizeYaw(right.YawDegrees);
 
     private void ValidateActor(ActorTrack actor, IEnumerable<string> actorIds, string parameterName)
     {
