@@ -1,5 +1,6 @@
 using PvpGuide.Application.Commands;
 using PvpGuide.Application.Editing;
+using PvpGuide.Application.Playback;
 using PvpGuide.Application.Sessions;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Actors;
@@ -10,6 +11,153 @@ namespace PvpGuide.Application.Tests;
 
 public sealed class DocumentSessionTests
 {
+    [Fact]
+    public void Selected_actor_is_editable_only_while_paused_at_its_first_keyframe_time()
+    {
+        var session = CreateQuarterSecondSession(out _);
+        var availability = new List<(bool CanEdit, string? Reason)>();
+        session.EditAvailabilityChanged += (_, args) => availability.Add((args.CanEditSelectedTransform, args.EditLockReason));
+
+        session.SelectActor("host");
+        Assert.False(session.CanEditSelectedTransform);
+        Assert.Equal("최초 키프레임 시각에서만 편집할 수 있습니다", session.EditLockReason);
+
+        Assert.True(session.Playback.Seek(0.25));
+        Assert.True(session.CanEditSelectedTransform);
+        Assert.Null(session.EditLockReason);
+
+        Assert.True(session.Playback.Play());
+        Assert.False(session.CanEditSelectedTransform);
+        Assert.Equal("재생 중에는 편집할 수 없습니다", session.EditLockReason);
+
+        Assert.True(session.Playback.Pause());
+        Assert.True(session.CanEditSelectedTransform);
+        Assert.Null(session.EditLockReason);
+        Assert.Equal(
+            [
+                (false, "최초 키프레임 시각에서만 편집할 수 있습니다"),
+                (true, null),
+                (false, "재생 중에는 편집할 수 없습니다"),
+                (true, null),
+            ],
+            availability);
+    }
+
+    [Fact]
+    public void Locked_transform_edits_and_preview_preserve_document_and_history()
+    {
+        var session = CreateQuarterSecondSession(out var document);
+        session.SelectActor("host");
+
+        Assert.False(session.CanEditSelectedTransform);
+        Assert.False(session.MoveSelectedActor(new Position3(8, 2, 9)));
+        Assert.False(session.RotateSelectedActor(90));
+        Assert.False(session.SetSelectedActorTransform(new Position3(8, 2, 9), 90));
+        var exception = Assert.Throws<InvalidOperationException>(() => session.BeginPreview());
+
+        Assert.Contains(session.EditLockReason!, exception.Message);
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, session.UndoCount);
+        Assert.Equal(0, session.RedoCount);
+    }
+
+    [Fact]
+    public void Playback_change_clears_active_preview_before_external_playback_observers()
+    {
+        var session = CreateQuarterSecondSession(out _);
+        session.SelectActor("host");
+        session.Playback.Seek(0.25);
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(8, 2, 9), 90);
+        var events = new List<string>();
+        session.PreviewChanged += (_, args) => events.Add(args.Preview is null ? "preview:null" : "preview:value");
+        session.Playback.Changed += (_, _) => events.Add("playback");
+
+        Assert.True(session.Playback.Seek(0.5));
+
+        Assert.Equal(["preview:null", "playback"], events);
+    }
+
+    [Fact]
+    public void Throwing_preview_observer_does_not_leave_transform_editing_enabled_after_playback_starts()
+    {
+        var session = CreateQuarterSecondSession(out var document);
+        session.SelectActor("host");
+        session.Playback.Seek(0.25);
+        session.BeginPreview();
+        session.PreviewChanged += (_, args) =>
+        {
+            if (args.Preview is null)
+            {
+                throw new PreviewObserverException();
+            }
+        };
+
+        Assert.Throws<PreviewObserverException>(() => session.Playback.Play());
+
+        Assert.False(session.CanEditSelectedTransform);
+        Assert.Equal("재생 중에는 편집할 수 없습니다", session.EditLockReason);
+        Assert.False(session.CommitPreview());
+        Assert.False(session.MoveSelectedActor(new Position3(8, 2, 9)));
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, session.UndoCount);
+        Assert.Equal(0, session.RedoCount);
+    }
+
+    [Fact]
+    public void Playback_change_preserves_preview_and_availability_observer_failures_after_restoring_state()
+    {
+        var session = CreateQuarterSecondSession(out _);
+        session.SelectActor("host");
+        session.Playback.Seek(0.25);
+        session.BeginPreview();
+        session.PreviewChanged += (_, args) =>
+        {
+            if (args.Preview is null)
+            {
+                throw new PreviewObserverException();
+            }
+        };
+        session.EditAvailabilityChanged += (_, _) => throw new EditAvailabilityObserverException();
+
+        var exception = Assert.Throws<AggregateException>(() => session.Playback.Play());
+
+        Assert.Contains(exception.InnerExceptions, item => item is PreviewObserverException);
+        Assert.Contains(exception.InnerExceptions, item => item is EditAvailabilityObserverException);
+        Assert.False(session.CanEditSelectedTransform);
+        Assert.Equal("재생 중에는 편집할 수 없습니다", session.EditLockReason);
+    }
+
+    [Fact]
+    public void Playback_changes_preserve_revision_and_history()
+    {
+        var session = CreateQuarterSecondSession(out var document);
+        session.SelectActor("host");
+        var revision = document.Revision;
+
+        session.Playback.Seek(0.25);
+        session.Playback.Play();
+        session.Playback.Pause();
+
+        Assert.Equal(revision, document.Revision);
+        Assert.Equal(0, session.UndoCount);
+        Assert.Equal(0, session.RedoCount);
+    }
+
+    [Fact]
+    public void Selection_change_recalculates_edit_availability()
+    {
+        var session = CreateQuarterSecondSession(out _);
+        session.Playback.Seek(0.25);
+        session.SelectActor("host");
+        Assert.True(session.CanEditSelectedTransform);
+
+        session.SelectActor(null);
+
+        Assert.False(session.CanEditSelectedTransform);
+        Assert.Equal("배우를 선택해야 편집할 수 있습니다", session.EditLockReason);
+    }
+
     [Fact]
     public void Actor_display_info_exposes_immutable_name_and_role_without_exposing_actor_tracks()
     {
@@ -129,7 +277,7 @@ public sealed class DocumentSessionTests
 
         var selected = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
         Assert.Equal("host-first", selected.Id);
-        Assert.Equal(1, selected.TimeSeconds);
+        Assert.Equal(0, selected.TimeSeconds);
     }
 
     [Fact]
@@ -194,7 +342,7 @@ public sealed class DocumentSessionTests
     public void Failed_execute_preserves_history_stacks()
     {
         var session = CreateSessionWithUndoAndRedo(out var document);
-        var original = new TransformKeyframe("host-first", 1, new Position3(1, 2, 3), 10);
+        var original = new TransformKeyframe("host-first", 0, new Position3(1, 2, 3), 10);
         var expectedTransform = session.GetSelectedTransform();
         var expectedRevision = document.Revision;
 
@@ -504,7 +652,7 @@ public sealed class DocumentSessionTests
                     "Host",
                     "Hero",
                     [
-                        new TransformKeyframe("host-first", 1, new Position3(1, 2, 3), 10),
+                        new TransformKeyframe("host-first", 0, new Position3(1, 2, 3), 10),
                         new TransformKeyframe("host-second", 4, new Position3(2, 3, 4), 20),
                     ],
                     [],
@@ -514,6 +662,26 @@ public sealed class DocumentSessionTests
                     "Target",
                     "Enemy",
                     [new TransformKeyframe("target-first", 1, new Position3(7, 0, 8), 180)],
+                    [],
+                    [])
+            ]);
+        return new DocumentSession(document);
+    }
+
+    private static DocumentSession CreateQuarterSecondSession(out SceneDocument document)
+    {
+        document = SceneDocument.Create(
+            "quarter-second-document",
+            "Timeline editable",
+            null,
+            1,
+            30,
+            [
+                new ActorTrack(
+                    "host",
+                    "Host",
+                    "Hero",
+                    [new TransformKeyframe("host-first", 0.25, new Position3(1, 2, 3), 10)],
                     [],
                     [])
             ]);
@@ -533,4 +701,8 @@ public sealed class DocumentSessionTests
     }
 
     private sealed class ChangedObserverException : Exception;
+
+    private sealed class PreviewObserverException : Exception;
+
+    private sealed class EditAvailabilityObserverException : Exception;
 }

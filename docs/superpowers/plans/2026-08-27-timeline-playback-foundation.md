@@ -40,7 +40,7 @@
 
 **Produces:** deterministic playback state, preview cancellation on playback changes, explicit `CanEditSelectedTransform` and lock reason/event
 
-- [ ] **Step 1: PlaybackClock 경계 테스트를 RED로 작성한다**
+- [x] **Step 1: PlaybackClock 경계 테스트를 RED로 작성한다**
 
   `PlaybackClockTests`는 생성 검증, seek clamp/no-op, 재생 advance, 끝점 자동 정지, 끝점 play 되감기, pause/stop, 음수·비유한 입력 거부를 검사한다.
 
@@ -60,11 +60,11 @@
 
   `Changed`는 공개 호출당 최종 상태 한 번만 전달하고 같은 유효 상태는 전달하지 않는지 확인한다. RED 실행 결과가 새 타입 부재 또는 동작 불일치로 실패하는지 기록한다.
 
-- [ ] **Step 2: PlaybackClock을 최소 구현한다**
+- [x] **Step 2: PlaybackClock을 최소 구현한다**
 
   `PlaybackChangedEventArgs`는 `CurrentTimeSeconds`, `IsPlaying`을 가진 불변 event args다. `Seek()`는 `[0,duration]` clamp, `Play()`는 끝점에서 0으로 되감은 최종 playing 상태 한 번 통지, `Advance()`는 끝점 clamp와 auto-pause를 한 번에 통지한다. 상태가 실제로 바뀐 경우에만 `true`를 반환한다.
 
-- [ ] **Step 3: DocumentSession 잠금 테스트를 RED로 작성한다**
+- [x] **Step 3: DocumentSession 잠금 테스트를 RED로 작성한다**
 
   첫 키프레임이 t=0.25인 actor를 선택해 다음을 검증한다.
 
@@ -77,13 +77,13 @@
   - seek/play/pause는 revision과 UndoCount/RedoCount 불변
   - 선택 변경도 편집 가능 상태를 다시 계산
 
-- [ ] **Step 4: 세션 조립과 편집 guard를 최소 구현한다**
+- [x] **Step 4: 세션 조립과 편집 guard를 최소 구현한다**
 
   `DocumentSession` 생성 시 문서 길이/FPS로 clock을 만들고 먼저 내부 event를 구독한 뒤 `Playback`을 공개한다. `CanEditSelectedTransform`과 한글 `EditLockReason`을 제공하고 `EditAvailabilityChanged`는 실제 가능 여부/이유 변경 시만 발생시킨다. playback 상태 변화 handler는 `ClearPreview()` 후 편집 상태를 계산한다. 선택 변경도 preview 취소 후 상태를 계산한다.
 
   기존 edit API는 잠금 상태에서 mutation하지 않는다. `BeginPreview()`는 잠금 이유가 포함된 예외로 거부하고 Move/Rotate/Set은 false를 반환한다. Undo/Redo Application API의 역사적 계약은 유지하며 Presentation에서 잠근다.
 
-- [ ] **Step 5: Task 1 범위를 직렬 검증한다**
+- [x] **Step 5: Task 1 범위를 직렬 검증한다**
 
   ```powershell
   dotnet test .\tests\PvpGuide.Application.Tests\PvpGuide.Application.Tests.csproj -c Debug --nologo
@@ -92,7 +92,7 @@
 
   Expected: Application 실패 0, 기존 37개와 새 playback/session 테스트 통과, 구조 PASS.
 
-- [ ] **Step 6: fresh spec/quality 리뷰 후 메인이 커밋·푸시한다**
+- [x] **Step 6: fresh spec/quality 리뷰 후 메인이 커밋·푸시한다**
 
   spec 리뷰는 clock 상태 전이·event 횟수·비영구성·first-key 시각 정책을, quality 리뷰는 부동소수 경계·event 재진입·기존 session 회귀·observer 예외를 확인한다. Critical/Important 지적 수정과 fresh 재리뷰 후 정확한 경로만 스테이징한다.
 

@@ -32,6 +32,9 @@ $requiredFiles = @(
     (Join-Path $applicationRoot 'Sessions\DocumentSession.cs'),
     (Join-Path $applicationRoot 'Sessions\ActorDisplayInfo.cs'),
     (Join-Path $applicationRoot 'Sessions\SelectionChangedEventArgs.cs'),
+    (Join-Path $applicationRoot 'Sessions\EditAvailabilityChangedEventArgs.cs'),
+    (Join-Path $applicationRoot 'Playback\PlaybackClock.cs'),
+    (Join-Path $applicationRoot 'Playback\PlaybackChangedEventArgs.cs'),
     (Join-Path $applicationRoot 'Editing\TransformPreview.cs'),
     (Join-Path $applicationRoot 'Editing\TransformPreviewChangedEventArgs.cs'),
     (Join-Path $applicationRoot 'Editing\SceneEditResult.cs'),
@@ -62,6 +65,7 @@ $requiredFiles = @(
     (Join-Path $testRoot 'SceneDocumentTests.cs'),
     (Join-Path $applicationTestRoot 'PvpGuide.Application.Tests.csproj'),
     (Join-Path $applicationTestRoot 'DocumentSessionTests.cs'),
+    (Join-Path $applicationTestRoot 'PlaybackClockTests.cs'),
     (Join-Path $applicationTestRoot 'SceneProjectionControllerTests.cs'),
     (Join-Path $applicationTestRoot 'TransformPreviewControllerTests.cs'),
     (Join-Path $infrastructureTestRoot 'PvpGuide.Infrastructure.Tests.csproj'),
@@ -114,6 +118,7 @@ $applicationTestProjectFile = Join-Path $applicationTestRoot 'PvpGuide.Applicati
 $infrastructureProjectFile = Join-Path $infrastructureRoot 'PvpGuide.Infrastructure.csproj'
 $infrastructureTestProjectFile = Join-Path $infrastructureTestRoot 'PvpGuide.Infrastructure.Tests.csproj'
 $worldTransformMapperFile = Join-Path $projectRoot 'Features\ViewportSync\WorldTransformMapper.cs'
+$playbackClockFile = Join-Path $applicationRoot 'Playback\PlaybackClock.cs'
 
 Assert-Contains $projectFile 'run/main_scene="res://Scenes/Main/Main\.tscn"' '메인 장면 설정'
 Assert-Contains $projectFile '"C#"' 'C# 기능 설정'
@@ -130,6 +135,7 @@ Assert-Contains $infrastructureProjectFile '\.\./PvpGuide\.Domain/PvpGuide\.Doma
 Assert-Contains $infrastructureTestProjectFile '\.\./\.\./src/PvpGuide\.Infrastructure/PvpGuide\.Infrastructure\.csproj' 'Infrastructure 테스트 프로젝트 참조'
 Assert-Contains $infrastructureTestProjectFile 'synthetic-topview-v1\.scene\.json' '합성 가져오기 fixture 포함'
 Assert-NotContains $worldTransformMapperFile 'Godot|Vector[234]' 'WorldTransformMapper의 Godot 독립성'
+Assert-NotContains $playbackClockFile 'Godot|Node|Timer' 'PlaybackClock의 Godot 독립성'
 
 foreach ($nodeName in @('TopViewPanel', 'WorldViewPanel', 'TimelinePanel', 'InspectorPanel')) {
     Assert-Contains $sceneFile ([regex]::Escape('name="' + $nodeName + '"')) "장면 노드 $nodeName"

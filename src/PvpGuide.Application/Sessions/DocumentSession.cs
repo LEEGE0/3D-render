@@ -1,5 +1,6 @@
 using PvpGuide.Application.Commands;
 using PvpGuide.Application.Editing;
+using PvpGuide.Application.Playback;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Timeline;
 
@@ -7,6 +8,10 @@ namespace PvpGuide.Application.Sessions;
 
 public sealed class DocumentSession
 {
+    private const double EditTimeToleranceSeconds = 0.000000001;
+    private const string NoSelectionLockReason = "배우를 선택해야 편집할 수 있습니다";
+    private const string PlayingLockReason = "재생 중에는 편집할 수 없습니다";
+    private const string FirstKeyframeTimeLockReason = "최초 키프레임 시각에서만 편집할 수 있습니다";
     private readonly SceneDocument _document;
     private readonly Stack<ISceneEditCommand> _undoStack = [];
     private readonly Stack<ISceneEditCommand> _redoStack = [];
@@ -16,11 +21,20 @@ public sealed class DocumentSession
     public DocumentSession(SceneDocument document)
     {
         _document = document ?? throw new ArgumentNullException(nameof(document));
+        Playback = new PlaybackClock(_document.DurationSeconds, _document.FramesPerSecond);
+        Playback.Changed += OnPlaybackChanged;
+        UpdateEditAvailability(false);
     }
 
     public ISceneSnapshotSource SnapshotSource => _document;
 
     public string? SelectedActorId { get; private set; }
+
+    public PlaybackClock Playback { get; }
+
+    public bool CanEditSelectedTransform { get; private set; }
+
+    public string? EditLockReason { get; private set; }
 
     public bool CanUndo => _undoStack.Count > 0;
 
@@ -40,6 +54,8 @@ public sealed class DocumentSession
     public event EventHandler<SelectionChangedEventArgs>? SelectionChanged;
 
     public event EventHandler<TransformPreviewChangedEventArgs>? PreviewChanged;
+
+    public event EventHandler<EditAvailabilityChangedEventArgs>? EditAvailabilityChanged;
 
     public event EventHandler? HistoryChanged;
 
@@ -65,6 +81,7 @@ public sealed class DocumentSession
 
         ClearPreview();
         SelectedActorId = actorId;
+        UpdateEditAvailability();
         SelectionChanged?.Invoke(this, new SelectionChangedEventArgs(SelectedActorId));
     }
 
@@ -80,6 +97,11 @@ public sealed class DocumentSession
 
     public bool MoveSelectedActor(Position3 destination)
     {
+        if (!CanEditSelectedTransform)
+        {
+            return false;
+        }
+
         var before = GetSelectedTransform();
         return before is null
             ? false
@@ -88,6 +110,11 @@ public sealed class DocumentSession
 
     public bool RotateSelectedActor(double yawDegrees)
     {
+        if (!CanEditSelectedTransform)
+        {
+            return false;
+        }
+
         var before = GetSelectedTransform();
         return before is null
             ? false
@@ -96,6 +123,11 @@ public sealed class DocumentSession
 
     public bool SetSelectedActorTransform(Position3 position, double yawDegrees)
     {
+        if (!CanEditSelectedTransform)
+        {
+            return false;
+        }
+
         var before = GetSelectedTransform();
         return before is null
             ? false
@@ -140,6 +172,11 @@ public sealed class DocumentSession
 
     public void BeginPreview()
     {
+        if (!CanEditSelectedTransform)
+        {
+            throw new InvalidOperationException(EditLockReason ?? "변환 편집을 시작할 수 없습니다.");
+        }
+
         if (_previewStart is not null)
         {
             throw new InvalidOperationException("A transform preview is already active.");
@@ -289,6 +326,55 @@ public sealed class DocumentSession
     }
 
     private void RaiseHistoryChanged() => HistoryChanged?.Invoke(this, EventArgs.Empty);
+
+    private void OnPlaybackChanged(object? sender, PlaybackChangedEventArgs args)
+    {
+        try
+        {
+            ClearPreview();
+        }
+        catch (Exception exception)
+        {
+            CompleteMutationExceptionTransition(exception, () => UpdateEditAvailability());
+            throw;
+        }
+
+        UpdateEditAvailability();
+    }
+
+    private void UpdateEditAvailability(bool raiseEvent = true)
+    {
+        var (canEdit, reason) = GetEditAvailability();
+        if (CanEditSelectedTransform == canEdit && EditLockReason == reason)
+        {
+            return;
+        }
+
+        CanEditSelectedTransform = canEdit;
+        EditLockReason = reason;
+        if (raiseEvent)
+        {
+            EditAvailabilityChanged?.Invoke(this, new EditAvailabilityChangedEventArgs(canEdit, reason));
+        }
+    }
+
+    private (bool CanEdit, string? Reason) GetEditAvailability()
+    {
+        if (SelectedActorId is null)
+        {
+            return (false, NoSelectionLockReason);
+        }
+
+        if (Playback.IsPlaying)
+        {
+            return (false, PlayingLockReason);
+        }
+
+        var selected = GetSelectedTransform();
+        return selected is not null && Math.Abs(Playback.CurrentTimeSeconds - selected.TimeSeconds) <= EditTimeToleranceSeconds
+            ? (true, null)
+            : (false, FirstKeyframeTimeLockReason);
+    }
 
     private void ClearPreview()
     {
