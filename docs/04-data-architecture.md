@@ -27,7 +27,7 @@ SceneDocument
 - 표시 이름은 변경할 수 있지만 참조는 ID로 연결한다.
 - 시간 정렬 순서가 바뀌어도 ID는 유지한다.
 - 저장 최상단에 `schemaVersion`을 둔다.
-- 현재 설계의 내부 초기 버전은 `pvp-guide-scene/1`로 예약한다.
+- 현재 내부 저장 버전은 `pvp-guide-scene/2`다. legacy `pvp-guide-scene/1`은 읽기 migration 입력으로만 지원한다.
 - 가져온 원본 형식과 버전은 `source` 메타데이터에 별도로 기록한다.
 
 ## 핵심 개념 모델
@@ -64,7 +64,7 @@ SceneDocument
 
 ### CRUD와 preimage 무결성
 
-변환 CRUD는 `SceneDocument`의 다음 경계에서만 영구 데이터를 바꾼다.
+세 track CRUD는 `SceneDocument`의 명시적 경계에서만 영구 데이터를 바꾼다. 변환 경계는 다음과 같다.
 
 | 연산 | Domain 경계 | preimage / 불변 조건 |
 | --- | --- | --- |
@@ -74,33 +74,39 @@ SceneDocument
 
 `expectedCurrent`는 UI에서 편집을 시작했을 때의 immutable keyframe 값이다. 검증이 실패하면 Domain은 actor collection을 교체하거나 revision을 올리기 전에 예외로 끝난다. Application command는 이를 `Conflict`로 다루며, stale update/undo/redo가 최신 committed 값을 덮어쓰지 않는다. 의미적으로 같은 update는 `NoChange`이고 revision·Undo/Redo history를 만들지 않는다. 성공한 Domain 변경은 새 immutable `ActorTrack`을 만들어 교체하고 revision을 정확히 한 번 증가시킨다.
 
+Action에는 `AddActionKeyframe`/`UpdateActionKeyframe`/`RemoveActionKeyframe`, Lock-on에는 `AddLockOnKeyframe`/`UpdateLockOnKeyframe`/`RemoveLockOnKeyframe`이 있다. 두 track도 exact full-frame preimage를 비교하고 ID를 유지하며, 같은 time과 중복 ID를 거부한다. Lock-on Add/Update는 target이 self가 아니고 같은 문서에 존재하는 actor ID인지 추가로 검사한다. Transform과 달리 Action/Lock-on은 마지막 frame을 삭제해 빈 track이 될 수 있다. Application의 여섯 command는 이 경계를 호출하며 세 track이 단일 monotonic revision과 단일 Undo/Redo stack을 공유한다.
+
 ### 영구 문서와 비영구 세션 상태
 
 다음 값은 `SceneDocument` 저장 모델이 아니라 `DocumentSession`의 런타임 상태다.
 
-- `SelectedActorId`, `SelectedTransformKeyframeId`와 선택한 keyframe 객체
+- `SelectedActorId`, `SelectedTransformKeyframeId`, `SelectedActionKeyframeId`, `SelectedLockOnKeyframeId`와 각 선택의 immutable frame 사본
+- `ActiveTimelineTrack` (`Transform`, `Action`, `LockOn`)
 - `PlaybackClock`의 현재 time과 playing/paused 상태
-- 활성 `TransformPreview`, Undo/Redo stack, 버튼 가능 여부와 잠금 이유
+- 활성 `TransformPreview`, 공유 Undo/Redo stack, track별 버튼 가능 여부와 잠금 이유
 
-marker 클릭은 위 selection만 바꾸고 선택 keyframe time으로 seek한다. 새 Add 뒤에는 새 keyframe, Delete 뒤에는 가장 가까운 남은 keyframe을 선택한다. 문서 변경 또는 history 전환 뒤에도 ID가 유효하면 selection을 유지하고, 유효하지 않으면 현재 time의 marker 또는 가장 가까운 marker로 다시 맞춘다. 이 규칙은 저장 파일에 UI 선택을 섞지 않고 Inspector·marker·투영을 동기화한다.
+marker 클릭은 target active track을 먼저 확정한 뒤 필요하면 pause/seek하고 해당 track의 full-frame selection payload를 게시한다. 다른 시각으로 seek할 때 observer는 target active track과 selection을 함께 보며, 같은 시각 cross-track 전환은 seek notification이 없어도 target payload를 정확히 한 번 다시 게시한다. 선택 호출 전에는 actor, playback time/playing, active track과 세 selected ID를 비영구 rollback snapshot으로 보관한다. 재진입 중 target frame이 사라진 `Conflict`는 frame의 새 시각을 따라가지 않고 호출 time/playing을 복구한다. 이전 actor가 계속 선택돼 있으면 캡처 ID마다 최신 document full frame을 독립적으로 다시 읽으므로 다른 시각으로 이동한 frame도 같은 ID selection으로 남고, 삭제된 ID만 null이 된다. availability는 이 최신 selection과 복구된 playback 상태에서 다시 계산한다. actor selection이 해제·변경됐으면 snapshot actor를 강제로 되살리지 않고 null/현재 actor의 호출 시각 exact 상태로 재조정한다. rollback의 임시 playback 알림은 최종 payload로 합치고 nested actor 알림은 bounded FIFO 뒤 최종 active-track payload로 끝낸다. payload 게시 중 수락된 actor 변경은 뒤 observer 예외가 있어도 FIFO에서 적용·게시한 다음 그 예외를 다시 낸다. 새 semantic Add 뒤에는 새 keyframe을 선택한다. Delete/history 전환 뒤에는 세 track 각각 `기존 ID 유지 → 현재 time exact marker → time 거리·이른 time·ordinal ID 순 nearest → null` 규칙으로 다시 맞춘다. active track marker의 time만 재생 헤드를 안정화하며 다른 track selection은 full frame을 최신 문서에서 다시 읽는다. 이 규칙은 저장 파일에 UI 선택을 섞지 않고 Inspector·marker·투영을 동기화한다.
+
+`PlaybackClock`은 공개 state와 아직 게시하지 않은 요청 tail을 분리한다. `Changed(time, isPlaying)`의 모든 observer가 실행되는 동안 공개 state는 payload와 같고, 재진입 `Pause`/`Seek`/`Advance`는 FIFO tail을 기준으로 다음 state를 만든다. 뒤 observer 예외는 앞 observer가 이미 수락시킨 state를 취소하지 않으며, 수락된 FIFO를 적용·게시한 뒤 최초 예외를 다시 낸다. 32회 내 안정화되지 않으면 bounded 비안정화 예외가 observer 예외보다 우선한다.
 
 ### ActionKeyframe
 
-- `timeSeconds`
-- `actionKey`: `idle`, `move`, `attack` 같은 의미 기반 키
-- `variant`: 무기·공격 형태 등 선택적 변형
-- `playbackSpeed`
-- `startOffsetSeconds`
-- `syncGroupId`: 뒤잡 공격자·피격자처럼 동기화할 동작 묶음
-- `assetOverride`: 로컬 카탈로그의 선택적 참조
+- `id`: 안정 keyframe ID
+- `timeSeconds`: 유한한 0 이상 값이며 문서 duration 안, Action track 안에서 고유
+- `actionKey`: 공백이 아닌 원문 의미 키. 현재 구현은 trim하거나 자산 ID로 바꾸지 않는다.
+
+현재 영구 모델은 위 세 필드만 가진다. `variant`, playback speed/start offset, sync group과 local asset override는 실제 애니메이션 카탈로그 단계의 후속 확장이다.
 
 ### LockOnKeyframe
 
-- `timeSeconds`
-- `enabled`
-- `targetActorId`
-- `yawOffsetDegrees`
+- `id`: 안정 keyframe ID
+- `timeSeconds`: 유한한 0 이상 값이며 문서 duration 안, Lock-on track 안에서 고유
+- `enabled`: 이 marker부터 Lock-on을 표시할지 여부
+- `targetActorId`: null 또는 같은 문서의 다른 actor ID. `enabled=true`이면 null일 수 없다.
+- `yawOffsetDegrees`: 유한한 값이며 생성 시 `[-180, 180)`으로 정규화
 - `trackingMode`: `snap`, `continuous`, `keyframe_only`
+
+현재 mode와 offset은 저장·Inspector·lane label·snapshot·overlay까지 전달되는 의미 데이터다. 아직 target 방향으로 actor transform을 회전시키거나 이동 궤적을 생성하지 않는다.
 
 ## 좌표 변환
 
@@ -143,7 +149,9 @@ yaw = normalizeDegrees(leftYaw + delta * t)
 
 ### 단계 상태
 
-행동, 락온 ON/OFF, 대상과 표시 토글은 다음 키프레임 이전까지 왼쪽 값을 유지한다. 공격처럼 지속 시간이 있는 행동은 카탈로그 또는 키프레임의 명시적 지속 시간으로 종료를 계산한다.
+현재 `ActorTrack.EvaluateAction(time)`과 `EvaluateLockOn(time)`은 해당 time 이하에서 가장 늦은 marker 하나를 선택하는 left-hold 평가다. 첫 Action marker 전에는 `(SourceKeyframeId=null, ActionKey=null)`, 첫 Lock-on marker 전이나 빈 track에는 `(null, false, null, 0, Continuous)`를 반환한다. 선택 marker 이후 값은 다음 같은 track marker 전까지 유지되고 마지막 값은 문서 끝까지 유지된다. Transform처럼 두 값 사이를 보간하지 않는다.
+
+`SceneDocument.CreateSnapshot(time)`은 배우별 `EvaluatedTransform`과 `EvaluatedActorTimelineState(Action, LockOn)`을 같은 불변 snapshot에 넣고 입력 dictionary를 방어 복사한다. TopView와 WorldView가 이 한 snapshot을 공유하므로 서로 다른 time/revision의 action label과 lock line을 조합할 수 없다. 공격 지속 시간, animation clip 종료와 event window는 아직 카탈로그가 없으므로 단순 left-hold를 대체하지 않는다.
 
 ## 가이드 V1 가져오기
 
@@ -166,10 +174,12 @@ yaw = normalizeDegrees(leftYaw + delta * t)
 
 - JSON은 UTF-8, 고정 소수점 정책이 아닌 왕복 가능한 숫자 직렬화를 사용한다.
 - 필드 순서는 사람이 읽기 좋게 안정화하지만 의미 비교는 순서에 의존하지 않는다.
-- 새 버전은 이전 버전을 읽는 순차 마이그레이션을 제공한다.
-- 마이그레이션은 메모리에서 새 문서를 만든 뒤 검증하며 원본 파일을 덮어쓰지 않는다.
+- serializer 출력 schema는 항상 `pvp-guide-scene/2`이며 Action의 ID/time/key와 Lock-on의 ID/time/enabled/target/offset/mode를 왕복한다.
+- `/2` 입력은 모든 Lock-on frame에 유한 `yawOffsetDegrees`와 지원 mode 문자열을 요구한다. 누락, null, 비유한 수, unknown mode, unknown JSON member는 경로가 포함된 오류로 거부한다.
+- `/1` 입력만 Lock-on의 새 두 멤버가 없을 수 있다. Deserialize 단계에서 offset `0`, mode `continuous`를 적용해 현재 Domain 객체를 만들고, 다시 Serialize하면 `/2`와 두 명시 필드가 나온다. legacy 파일 자체는 덮어쓰지 않는다.
+- 마이그레이션과 `/2` round-trip은 Infrastructure `SceneDocumentSerializer` 책임이다. Editor 프로젝트는 Infrastructure를 참조하지 않으며 Godot runtime marker에 schema 성공 flag를 넣지 않는다. 완료 판정은 Infrastructure 전체 테스트의 migration/round-trip/strict failure/atomic load 결과로 한다.
 - 다운그레이드 저장은 지원하지 않고 내보내기 기능으로 분리한다.
-- 알 수 없는 확장 필드는 가능한 한 `extensionData`에 보존한다.
+- 현재 scene serializer는 알 수 없는 멤버를 보존하지 않고 strict하게 거부한다. 가져온 원본 payload의 알 수 없는 값은 별도 `ImportMetadata.RawSourcePayload`에 보존한다.
 
 ## 파생 데이터와 캐시
 

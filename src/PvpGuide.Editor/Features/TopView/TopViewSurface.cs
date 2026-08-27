@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using Godot;
 using PvpGuide.Application.Editing;
 using PvpGuide.Application.Projection;
@@ -19,6 +20,10 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     private const double PixelsPerUnit = 40;
     private const double MoveThresholdPixels = 3;
     private const float ActorRadiusPixels = 12;
+
+    private static readonly IReadOnlyDictionary<string, SemanticActorOverlay> EmptySemanticOverlays =
+        new ReadOnlyDictionary<string, SemanticActorOverlay>(
+            new Dictionary<string, SemanticActorOverlay>(StringComparer.Ordinal));
 
     private readonly Color _gridColor = new("263248");
     private readonly Color _actorColor = new("55aaff");
@@ -44,6 +49,9 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         ]);
 
     public int ApplyCount { get; private set; }
+
+    public IReadOnlyDictionary<string, SemanticActorOverlay> DisplayedSemanticOverlays { get; private set; } =
+        EmptySemanticOverlays;
 
     public void Initialize(DocumentSession session)
     {
@@ -71,8 +79,9 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     public void Apply(SceneSnapshot snapshot)
     {
         ArgumentNullException.ThrowIfNull(snapshot);
-        _ = SemanticOverlayLayout.CreateScene(snapshot);
+        var overlays = SemanticOverlayLayout.CreateScene(snapshot, CreateDisplayedPositions(_preview));
         _latestSnapshot = snapshot;
+        DisplayedSemanticOverlays = overlays;
         ApplyCount++;
 
         if (_selectedActorId is not null && !snapshot.ActorTransforms.ContainsKey(_selectedActorId))
@@ -85,7 +94,11 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
 
     public void ApplyPreview(TransformPreview? preview)
     {
+        var overlays = _latestSnapshot is null
+            ? DisplayedSemanticOverlays
+            : SemanticOverlayLayout.CreateScene(_latestSnapshot, CreateDisplayedPositions(preview));
         _preview = preview;
+        DisplayedSemanticOverlays = overlays;
         QueueRedraw();
     }
 
@@ -99,19 +112,18 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         }
 
         var mapper = CreateMapper();
-        var overlays = SemanticOverlayLayout.CreateScene(snapshot, CreateDisplayedPositions());
         foreach (var layer in SemanticDrawLayerOrder)
         {
             switch (layer)
             {
                 case TopViewSemanticDrawLayer.LockLines:
-                    DrawLockLines(mapper, overlays);
+                    DrawLockLines(mapper, DisplayedSemanticOverlays);
                     break;
                 case TopViewSemanticDrawLayer.ActorBodies:
-                    DrawActorBodies(snapshot, mapper, overlays);
+                    DrawActorBodies(snapshot, mapper, DisplayedSemanticOverlays);
                     break;
                 case TopViewSemanticDrawLayer.TargetMarkers:
-                    DrawTargetMarkers(mapper, overlays);
+                    DrawTargetMarkers(mapper, DisplayedSemanticOverlays);
                     break;
                 default:
                     throw new InvalidOperationException($"Unsupported top-view semantic draw layer: {layer}.");
@@ -285,6 +297,9 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
 
             FocusExited -= OnFocusExited;
             _session = null;
+            _latestSnapshot = null;
+            _preview = null;
+            DisplayedSemanticOverlays = EmptySemanticOverlays;
             _dragMode = DragMode.None;
             _disposed = true;
         }
@@ -477,12 +492,12 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
             ? new EvaluatedTransform(_preview.Position, _preview.YawDegrees)
             : committed;
 
-    private IReadOnlyDictionary<string, Position3>? CreateDisplayedPositions() =>
-        _preview is null
+    private static IReadOnlyDictionary<string, Position3>? CreateDisplayedPositions(TransformPreview? preview) =>
+        preview is null
             ? null
             : new Dictionary<string, Position3>(StringComparer.Ordinal)
             {
-                [_preview.ActorId] = _preview.Position,
+                [preview.ActorId] = preview.Position,
             };
 
     private TopViewCoordinateMapper CreateMapper() => new(

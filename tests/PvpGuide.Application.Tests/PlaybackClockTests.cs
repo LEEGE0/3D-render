@@ -102,6 +102,170 @@ public sealed class PlaybackClockTests
         Assert.Equal([(0.5d, false), (0.5d, true), (0d, false)], changes);
     }
 
+    [Fact]
+    public void Reentrant_pause_and_seek_publish_fifo_states_with_matching_public_state_for_every_observer()
+    {
+        var clock = new PlaybackClock(3, 30);
+        var firstObserver = new List<(
+            double EventTime,
+            bool EventIsPlaying,
+            double PublicTime,
+            bool PublicIsPlaying)>();
+        var secondObserver = new List<(
+            double EventTime,
+            bool EventIsPlaying,
+            double PublicTime,
+            bool PublicIsPlaying)>();
+        var requestedFollowup = false;
+        clock.Changed += (_, args) =>
+        {
+            firstObserver.Add((
+                args.CurrentTimeSeconds,
+                args.IsPlaying,
+                clock.CurrentTimeSeconds,
+                clock.IsPlaying));
+            if (requestedFollowup)
+            {
+                return;
+            }
+
+            requestedFollowup = true;
+            Assert.True(clock.Pause());
+            Assert.True(clock.Seek(2));
+        };
+        clock.Changed += (_, args) => secondObserver.Add((
+            args.CurrentTimeSeconds,
+            args.IsPlaying,
+            clock.CurrentTimeSeconds,
+            clock.IsPlaying));
+
+        Assert.True(clock.Play());
+
+        var expected = new[]
+        {
+            (0d, true, 0d, true),
+            (0d, false, 0d, false),
+            (2d, false, 2d, false)
+        };
+        Assert.Equal(expected, firstObserver);
+        Assert.Equal(expected, secondObserver);
+        Assert.Equal(2, clock.CurrentTimeSeconds);
+        Assert.False(clock.IsPlaying);
+    }
+
+    [Fact]
+    public void Throwing_later_observer_does_not_discard_accepted_reentrant_states()
+    {
+        var clock = new PlaybackClock(3, 30);
+        var expectedFailure = new ApplicationException("later playback observer failed");
+        var firstObserverStates = new List<(double Time, bool IsPlaying)>();
+        var secondObserverStates = new List<(double Time, bool IsPlaying)>();
+        var finalObserverStates = new List<(double Time, bool IsPlaying)>();
+        var requestedFollowup = false;
+        var callbackDepth = 0;
+        var maximumCallbackDepth = 0;
+        clock.Changed += (_, args) =>
+        {
+            callbackDepth++;
+            maximumCallbackDepth = Math.Max(maximumCallbackDepth, callbackDepth);
+            try
+            {
+                firstObserverStates.Add((args.CurrentTimeSeconds, args.IsPlaying));
+                if (!requestedFollowup)
+                {
+                    requestedFollowup = true;
+                    Assert.True(clock.Pause());
+                    Assert.True(clock.Seek(2));
+                }
+            }
+            finally
+            {
+                callbackDepth--;
+            }
+        };
+        clock.Changed += (_, args) =>
+        {
+            secondObserverStates.Add((args.CurrentTimeSeconds, args.IsPlaying));
+            if (args.CurrentTimeSeconds == 0 && args.IsPlaying)
+            {
+                throw expectedFailure;
+            }
+        };
+        clock.Changed += (_, args) =>
+            finalObserverStates.Add((args.CurrentTimeSeconds, args.IsPlaying));
+
+        var exception = Record.Exception(() => clock.Play());
+
+        Assert.Same(expectedFailure, exception);
+        Assert.Equal([(0d, true), (0d, false), (2d, false)], firstObserverStates);
+        Assert.Equal([(0d, true), (0d, false), (2d, false)], secondObserverStates);
+        Assert.Equal([(0d, false), (2d, false)], finalObserverStates);
+        Assert.Equal(1, maximumCallbackDepth);
+        Assert.Equal(2, clock.CurrentTimeSeconds);
+        Assert.False(clock.IsPlaying);
+    }
+
+    [Fact]
+    public void Alternating_reentrant_changes_keep_payload_and_public_state_equal_until_bound_failure()
+    {
+        var clock = new PlaybackClock(3, 30);
+        var callbackDepth = 0;
+        var maximumCallbackDepth = 0;
+        var callbackCount = 0;
+        clock.Changed += (_, args) =>
+        {
+            callbackDepth++;
+            maximumCallbackDepth = Math.Max(maximumCallbackDepth, callbackDepth);
+            try
+            {
+                callbackCount++;
+                Assert.True(clock.Seek(args.CurrentTimeSeconds == 1 ? 2 : 1));
+                Assert.Equal(args.CurrentTimeSeconds, clock.CurrentTimeSeconds);
+                Assert.Equal(args.IsPlaying, clock.IsPlaying);
+            }
+            finally
+            {
+                callbackDepth--;
+            }
+        };
+
+        var exception = Record.Exception(() => clock.Seek(1));
+
+        Assert.Equal(1, maximumCallbackDepth);
+        Assert.InRange(callbackCount, 1, 32);
+        var boundedFailure = Assert.IsType<InvalidOperationException>(exception);
+        Assert.Equal("Playback state notification did not stabilize.", boundedFailure.Message);
+    }
+
+    [Fact]
+    public void Bounded_non_stabilization_takes_precedence_over_an_earlier_observer_failure()
+    {
+        var clock = new PlaybackClock(3, 30);
+        var observerFailure = new ApplicationException("first observer cycle failed");
+        var callbackCount = 0;
+        var observerFailed = false;
+        clock.Changed += (_, args) =>
+        {
+            callbackCount++;
+            Assert.True(clock.Seek(args.CurrentTimeSeconds == 1 ? 2 : 1));
+        };
+        clock.Changed += (_, _) =>
+        {
+            if (!observerFailed)
+            {
+                observerFailed = true;
+                throw observerFailure;
+            }
+        };
+
+        var exception = Record.Exception(() => clock.Seek(1));
+
+        Assert.True(observerFailed);
+        Assert.Equal(32, callbackCount);
+        var boundedFailure = Assert.IsType<InvalidOperationException>(exception);
+        Assert.Equal("Playback state notification did not stabilize.", boundedFailure.Message);
+    }
+
     [Theory]
     [InlineData(double.NaN)]
     [InlineData(double.PositiveInfinity)]

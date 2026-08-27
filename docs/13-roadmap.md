@@ -89,27 +89,36 @@ Windows 11에서 오프라인으로 메인 창이 열리고 헤드리스 검증�
 
 selection, playback time, preview와 history stack은 저장되는 `SceneDocument` 데이터가 아니라 세션 상태다. marker 선택·scrub·pause는 revision을 만들지 않으며, 성공한 Add/Update/Delete/Undo/Redo만 문서와 history를 바꾼다.
 
-### 다음 구현 단위 — Action/Lock-on track foundation
+### 완료된 단계 3C — Action/Lock-on track foundation
 
-- 행동과 락온의 ID·time 기반 selection 및 read model
-- action keyframe/구간과 lock-on enabled·target·tracking mode의 Domain command 경계
-- marker/구간 layout, hit-test와 Inspector 편집 surface의 순수 계산 경계
-- transform track과 독립된 selection·preview·playback lock 정책, Undo/Redo와 stale preimage 검증
-- 지정 시각에서 action·lock-on 단계 상태를 평가해 TopView/3D 교육 overlay에 전달하는 foundation
+- [x] `ActionKeyframe`과 offset/mode를 포함한 `LockOnKeyframe`의 immutable CRUD, ID/time/target 검증과 left-hold 평가
+- [x] `pvp-guide-scene/1` Lock-on의 offset `0`/mode `continuous` migration과 strict `pvp-guide-scene/2` round-trip
+- [x] Action/Lock-on Add/Update/Delete command, deterministic ID, active track selection과 Transform을 포함한 shared Undo/Redo history
+- [x] document/history 전환 뒤 세 track full-frame selection reconciliation과 playback lock/no-op/stale preimage 불변
+- [x] Godot 독립 step marker/segment layout, Action/Lock-on surface viewport hit와 enabled/target/mode label
+- [x] Action/Lock-on toolbar, active semantic Inspector, target/mode/offset 입력과 exact Main wiring/역순 idempotent cleanup
+- [x] 동일 `SceneSnapshot`의 stepped state를 사용하는 TopView action/lock line/target marker와 WorldView `ActionLabel`/`LockBadge`/재사용 `LockLine`
+- [x] 실제 Button/SpinBox/LineEdit/OptionButton/surface signal, hand-derived revision/history/apply count, selection, left-hold, playback lock, cross-time·same-time Action↔Lock-on Inspector 전환과 두 overlay를 검증하는 exact runtime marker
 
-이 단위는 transform CRUD의 시간·selection·command 계약을 재사용하되, 실제 DSR animation 연결이나 최종 combat rule 판정을 선행 완료로 주장하지 않는다.
+3C는 의미 track을 저장·편집·평가·표시하는 foundation이다. mode/offset은 문서와 overlay에 보존되고, global history toolbar로 세 track command를 active marker 전환 없이 왕복한다. 아직 target 방향으로 actor Yaw를 계산하지 않으며, 실제 DSR animation clip이나 combat rule 판정을 연결하지 않는다.
+
+### 다음 구현 단위 — Lock-on 방향 계산과 이동 궤적
+
+- target actor의 같은 snapshot transform에서 바라보는 방향을 계산하고 `yawOffsetDegrees`를 적용한다.
+- `Snap`, `Continuous`, `KeyframeOnly`가 방향 갱신 시점에 미치는 차이를 순수 Domain/Application 계약과 hand-derived fixture로 고정한다.
+- 자유 방향 이동과 Lock-on 방향 이동을 같은 시간 샘플에서 평가해 TopView/WorldView 이동 궤적으로 비교 표시한다.
+- target 없음/삭제, actor 위치 일치, 0/360 및 정확한 180° 방향, scrub/playback/preview 경계를 결정적으로 처리한다.
+- timeline 확대·스크롤·스냅과 marker drag/복제 UX의 우선순위를 함께 검토한다.
 
 ### 단계 3 후속 작업
 
-- Action/Lock-on track foundation과 구간 편집
-- 최단 회전과 단계 상태 평가
-- 락온 대상과 연속 방향 계산
-- 이동 궤적
+- Lock-on target과 mode/offset 기반 방향 계산
+- 자유 방향/Lock-on 이동 궤적
 - 타임라인 확대·스크롤·프레임/키프레임/구간 스냅
 
 ### 완료 기준
 
-단계 3 전체 완료 기준은 네 캐릭터 장면을 60FPS 목표로 재생하고, transform CRUD를 Undo/Redo할 수 있으며, 락온 이동과 자유 방향 이동이 예상대로 다르게 동작하는 것이다. 현재 3A/3B는 이 기준 중 시간 평가·재생과 transform CRUD까지 완료했으며, Action/Lock-on track foundation이 다음 범위다.
+단계 3 전체 완료 기준은 네 캐릭터 장면을 60FPS 목표로 재생하고, 세 track CRUD를 Undo/Redo할 수 있으며, 락온 이동과 자유 방향 이동이 예상대로 다르게 동작하는 것이다. 현재 3A/3B/3C는 시간 평가·재생, transform CRUD와 Action/Lock-on 단계 상태 foundation까지 완료했다. Lock-on 방향 계산과 이동 궤적이 다음 범위다.
 
 ## 단계 4 — 가이드 가져오기와 저장
 

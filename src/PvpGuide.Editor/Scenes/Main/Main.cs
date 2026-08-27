@@ -19,8 +19,12 @@ public partial class Main : Control
     private TransformPreviewController? _previewController;
     private TransformInspectorController? _inspectorController;
     private TimelineController? _timelineController;
+    private ActionLockOnInspectorController? _actionLockOnInspectorController;
+    private SemanticTimelineController? _semanticTimelineController;
     private TopViewSurface? _topViewSurface;
     private TransformTrackSurface? _transformTrackSurface;
+    private ActionTrackSurface? _actionTrackSurface;
+    private LockOnTrackSurface? _lockOnTrackSurface;
     private PlaybackClock? _playback;
 
     private static readonly string[] RequiredPanels =
@@ -52,6 +56,7 @@ public partial class Main : Control
         var light = GetNodeOrNull<DirectionalLight3D>("WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot/DirectionalLight3D");
         var ground = GetNodeOrNull<MeshInstance3D>("WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot/Ground");
         var actorsRoot = GetNodeOrNull<Node3D>("WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot/Actors");
+        var transformInspector = GetNodeOrNull<Control>("InspectorPanel/TransformInspector");
         var selectedActorLabel = GetNodeOrNull<Label>("InspectorPanel/TransformInspector/SelectedActorLabel");
         var selectedKeyframeLabel = GetNodeOrNull<Label>("InspectorPanel/TransformInspector/SelectedKeyframeLabel");
         var errorLabel = GetNodeOrNull<Label>("InspectorPanel/TransformInspector/ErrorLabel");
@@ -61,28 +66,57 @@ public partial class Main : Control
         var zInput = GetNodeOrNull<SpinBox>("InspectorPanel/TransformInspector/ZInput");
         var yawInput = GetNodeOrNull<SpinBox>("InspectorPanel/TransformInspector/YawInput");
         var applyButton = GetNodeOrNull<Button>("InspectorPanel/TransformInspector/ApplyButton");
-        var undoButton = GetNodeOrNull<Button>("InspectorPanel/TransformInspector/UndoButton");
-        var redoButton = GetNodeOrNull<Button>("InspectorPanel/TransformInspector/RedoButton");
+        var undoButton = GetNodeOrNull<Button>("InspectorPanel/HistoryToolbar/UndoButton");
+        var redoButton = GetNodeOrNull<Button>("InspectorPanel/HistoryToolbar/RedoButton");
         var playPauseButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/PlaybackButtons/PlayPauseButton");
         var stopButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/PlaybackButtons/StopButton");
         var transformTrackSurface = GetNodeOrNull<TransformTrackSurface>("TimelinePanel/TimelineControls/TransformTrackSurface");
         var addKeyframeButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/KeyframeToolbar/AddKeyframeButton");
         var deleteKeyframeButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/KeyframeToolbar/DeleteKeyframeButton");
+        var actionTrackSurface = GetNodeOrNull<ActionTrackSurface>("TimelinePanel/TimelineControls/ActionTrackSurface");
+        var actionAddButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/ActionToolbar/ActionAddButton");
+        var actionDeleteButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/ActionToolbar/ActionDeleteButton");
+        var lockOnTrackSurface = GetNodeOrNull<LockOnTrackSurface>("TimelinePanel/TimelineControls/LockOnTrackSurface");
+        var lockOnAddButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/LockOnToolbar/LockOnAddButton");
+        var lockOnDeleteButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/LockOnToolbar/LockOnDeleteButton");
         var timeSlider = GetNodeOrNull<HSlider>("TimelinePanel/TimelineControls/TimeSlider");
         var currentTimeLabel = GetNodeOrNull<Label>("TimelinePanel/TimelineControls/CurrentTimeLabel");
         var timelineStatus = GetNodeOrNull<Label>("TimelinePanel/TimelineControls/TimelineStatus");
+        var actionInspector = GetNodeOrNull<Control>("InspectorPanel/ActionInspector");
+        var actionSelectionLabel = GetNodeOrNull<Label>("InspectorPanel/ActionInspector/ActionSelectedKeyframeLabel");
+        var actionTimeInput = GetNodeOrNull<SpinBox>("InspectorPanel/ActionInspector/ActionTimeInput");
+        var actionKeyInput = GetNodeOrNull<LineEdit>("InspectorPanel/ActionInspector/ActionKeyInput");
+        var actionApplyButton = GetNodeOrNull<Button>("InspectorPanel/ActionInspector/ActionApplyButton");
+        var actionErrorLabel = GetNodeOrNull<Label>("InspectorPanel/ActionInspector/ActionErrorLabel");
+        var lockOnInspector = GetNodeOrNull<Control>("InspectorPanel/LockOnInspector");
+        var lockOnSelectionLabel = GetNodeOrNull<Label>("InspectorPanel/LockOnInspector/LockOnSelectedKeyframeLabel");
+        var lockTimeInput = GetNodeOrNull<SpinBox>("InspectorPanel/LockOnInspector/LockTimeInput");
+        var lockEnabledInput = GetNodeOrNull<CheckBox>("InspectorPanel/LockOnInspector/LockEnabledInput");
+        var lockTargetInput = GetNodeOrNull<OptionButton>("InspectorPanel/LockOnInspector/LockTargetInput");
+        var lockModeInput = GetNodeOrNull<OptionButton>("InspectorPanel/LockOnInspector/LockModeInput");
+        var lockYawOffsetInput = GetNodeOrNull<SpinBox>("InspectorPanel/LockOnInspector/LockYawOffsetInput");
+        var lockApplyButton = GetNodeOrNull<Button>("InspectorPanel/LockOnInspector/LockApplyButton");
+        var lockErrorLabel = GetNodeOrNull<Label>("InspectorPanel/LockOnInspector/LockErrorLabel");
         if (topViewSurface is null || worldViewportContainer is null || worldViewport is null || worldRoot is null ||
             camera is null || light is null || ground is null || actorsRoot is null ||
-            selectedActorLabel is null || selectedKeyframeLabel is null || errorLabel is null || timeInput is null ||
+            transformInspector is null || selectedActorLabel is null || selectedKeyframeLabel is null ||
+            errorLabel is null || timeInput is null ||
             xInput is null || yInput is null || zInput is null || yawInput is null ||
             applyButton is null || undoButton is null || redoButton is null ||
             playPauseButton is null || stopButton is null || transformTrackSurface is null ||
-            addKeyframeButton is null || deleteKeyframeButton is null || timeSlider is null ||
-            currentTimeLabel is null || timelineStatus is null)
+            addKeyframeButton is null || deleteKeyframeButton is null || actionTrackSurface is null ||
+            actionAddButton is null || actionDeleteButton is null || lockOnTrackSurface is null ||
+            lockOnAddButton is null || lockOnDeleteButton is null || timeSlider is null ||
+            currentTimeLabel is null || timelineStatus is null || actionInspector is null ||
+            actionSelectionLabel is null || actionTimeInput is null || actionKeyInput is null ||
+            actionApplyButton is null || actionErrorLabel is null || lockOnInspector is null ||
+            lockOnSelectionLabel is null || lockTimeInput is null || lockEnabledInput is null ||
+            lockTargetInput is null || lockModeInput is null || lockYawOffsetInput is null ||
+            lockApplyButton is null || lockErrorLabel is null)
         {
             FailRuntimeVerification(
                 "startup-required-children",
-                new InvalidOperationException("타임라인과 기본 편집 UI에 필요한 자식 노드가 없습니다."));
+                new InvalidOperationException("타임라인과 Transform/Action/Lock-on 편집 UI에 필요한 자식 노드가 없습니다."));
             return;
         }
 
@@ -109,6 +143,10 @@ public partial class Main : Control
             topViewSurface.Initialize(session);
             _transformTrackSurface = transformTrackSurface;
             transformTrackSurface.Attach(session);
+            _actionTrackSurface = actionTrackSurface;
+            actionTrackSurface.Attach(session);
+            _lockOnTrackSurface = lockOnTrackSurface;
+            lockOnTrackSurface.Attach(session);
             _projectionController = new SceneProjectionController(
                 session.SnapshotSource,
                 session.Playback,
@@ -141,6 +179,36 @@ public partial class Main : Control
                 transformTrackSurface,
                 addKeyframeButton,
                 deleteKeyframeButton);
+            _actionLockOnInspectorController = new ActionLockOnInspectorController(
+                session,
+                transformInspector,
+                actionInspector,
+                actionSelectionLabel,
+                actionTimeInput,
+                actionKeyInput,
+                actionApplyButton,
+                actionErrorLabel,
+                lockOnInspector,
+                lockOnSelectionLabel,
+                lockTimeInput,
+                lockEnabledInput,
+                lockTargetInput,
+                lockModeInput,
+                lockYawOffsetInput,
+                lockApplyButton,
+                lockErrorLabel);
+            _semanticTimelineController = new SemanticTimelineController(
+                session,
+                actionAddButton,
+                actionDeleteButton,
+                lockOnAddButton,
+                lockOnDeleteButton,
+                actionKeyInput,
+                lockEnabledInput,
+                lockTargetInput,
+                lockModeInput,
+                lockYawOffsetInput,
+                timelineStatus);
 
             _projectionController.ProjectCurrent();
             GD.Print($"PROJECTION_SYNC_READY revision={document.Revision} top={topViewSurface.ApplyCount} world={worldAdapter.ApplyCount}");
@@ -187,6 +255,7 @@ public partial class Main : Control
                 currentTimeLabel,
                 timelineStatus);
             Callable.From(() => CompleteDeferredRuntimeVerification(() =>
+                {
                     RunTimelineKeyframeCrudIntegration(
                         document,
                         session,
@@ -208,7 +277,41 @@ public partial class Main : Control
                         deleteKeyframeButton,
                         timeSlider,
                         errorLabel,
-                        timelineStatus)))
+                        timelineStatus);
+                    ActionLockOnRuntimeProbe.Run(
+                        document,
+                        session,
+                        topViewSurface,
+                        worldAdapter,
+                        actorsRoot,
+                        actionTrackSurface,
+                        actionAddButton,
+                        actionDeleteButton,
+                        actionInspector,
+                        actionSelectionLabel,
+                        actionTimeInput,
+                        actionKeyInput,
+                        actionApplyButton,
+                        actionErrorLabel,
+                        lockOnTrackSurface,
+                        lockOnAddButton,
+                        lockOnDeleteButton,
+                        lockOnInspector,
+                        lockOnSelectionLabel,
+                        lockTimeInput,
+                        lockEnabledInput,
+                        lockTargetInput,
+                        lockModeInput,
+                        lockYawOffsetInput,
+                        lockApplyButton,
+                        lockErrorLabel,
+                        errorLabel,
+                        undoButton,
+                        redoButton,
+                        playPauseButton,
+                        timeSlider,
+                        timelineStatus);
+                }))
                 .CallDeferred();
         }
         catch (Exception exception)
@@ -232,6 +335,10 @@ public partial class Main : Control
 
     private void DisposeControllers()
     {
+        _semanticTimelineController?.Dispose();
+        _semanticTimelineController = null;
+        _actionLockOnInspectorController?.Dispose();
+        _actionLockOnInspectorController = null;
         _timelineController?.Dispose();
         _timelineController = null;
         _inspectorController?.Dispose();
@@ -240,6 +347,10 @@ public partial class Main : Control
         _previewController = null;
         _projectionController?.Dispose();
         _projectionController = null;
+        _lockOnTrackSurface?.Detach();
+        _lockOnTrackSurface = null;
+        _actionTrackSurface?.Detach();
+        _actionTrackSurface = null;
         _transformTrackSurface?.Detach();
         _transformTrackSurface = null;
         _topViewSurface?.DetachSession();
@@ -554,11 +665,11 @@ public partial class Main : Control
                     session.EditLockReason?.Contains("선택한 키프레임 시각", StringComparison.Ordinal) == true,
                 "0.5초 read-only 편집 잠금이 활성화되지 않았습니다.");
             Require(!xInput.Editable && !yInput.Editable && !zInput.Editable && !yawInput.Editable &&
-                    applyButton.Disabled && undoButton.Disabled && redoButton.Disabled &&
+                    applyButton.Disabled && !undoButton.Disabled && redoButton.Disabled &&
                     !addKeyframeButton.Disabled && deleteKeyframeButton.Disabled &&
                     timelineStatus.Text.Contains("삭제 불가", StringComparison.Ordinal) &&
                     timelineStatus.Text.Contains("선택한 키프레임 시각", StringComparison.Ordinal),
-                "Inspector/history/timeline UI가 0.5초 편집 잠금을 표시하지 않았습니다.");
+                "Inspector/global history/timeline UI가 0.5초 편집 상태를 표시하지 않았습니다.");
 
             var guardedPointer = new ScreenPoint(midpointCenter.X + 40, midpointCenter.Y);
             SendLeftButton(topViewSurface, midpointCenter, pressed: true);

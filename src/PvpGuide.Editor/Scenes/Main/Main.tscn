@@ -172,10 +172,28 @@ offset_top = 360.0
 offset_right = 1280.0
 offset_bottom = 720.0
 
-[node name="TransformInspector" type="VBoxContainer" parent="InspectorPanel"]
+[node name="HistoryToolbar" type="HBoxContainer" parent="InspectorPanel"]
 layout_mode = 0
 offset_left = 16.0
 offset_top = 16.0
+offset_right = 304.0
+offset_bottom = 48.0
+theme_override_constants/separation = 8
+
+[node name="UndoButton" type="Button" parent="InspectorPanel/HistoryToolbar"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "실행 취소"
+
+[node name="RedoButton" type="Button" parent="InspectorPanel/HistoryToolbar"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "다시 실행"
+
+[node name="TransformInspector" type="VBoxContainer" parent="InspectorPanel"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 56.0
 offset_right = 304.0
 offset_bottom = 344.0
 theme_override_constants/separation = 8
@@ -229,14 +247,6 @@ suffix = "°"
 layout_mode = 2
 text = "변환 적용"
 
-[node name="UndoButton" type="Button" parent="InspectorPanel/TransformInspector"]
-layout_mode = 2
-text = "실행 취소"
-
-[node name="RedoButton" type="Button" parent="InspectorPanel/TransformInspector"]
-layout_mode = 2
-text = "다시 실행"
-
 [node name="ErrorLabel" type="Label" parent="InspectorPanel/TransformInspector"]
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.35, 0.35, 1)
@@ -246,7 +256,7 @@ autowrap_mode = 2
 visible = false
 layout_mode = 0
 offset_left = 16.0
-offset_top = 16.0
+offset_top = 56.0
 offset_right = 304.0
 offset_bottom = 344.0
 theme_override_constants/separation = 8
@@ -280,7 +290,7 @@ autowrap_mode = 2
 visible = false
 layout_mode = 0
 offset_left = 16.0
-offset_top = 16.0
+offset_top = 56.0
 offset_right = 304.0
 offset_bottom = 344.0
 theme_override_constants/separation = 8

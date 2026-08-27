@@ -4,6 +4,7 @@ using PvpGuide.Application.Playback;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Actors;
 using PvpGuide.Domain.Timeline;
+using System.Runtime.ExceptionServices;
 
 namespace PvpGuide.Application.Sessions;
 
@@ -29,6 +30,9 @@ public sealed class DocumentSession
     private TransformKeyframe? _selectedTransformKeyframe;
     private ActionKeyframe? _selectedActionKeyframe;
     private LockOnKeyframe? _selectedLockOnKeyframe;
+    private readonly Queue<SemanticRollbackWorkItem> _semanticRollbackWorkItems = [];
+    private bool _isRestoringSemanticSelection;
+    private bool _isDispatchingSemanticRollbackWork;
 
     public DocumentSession(SceneDocument document)
     {
@@ -118,9 +122,24 @@ public sealed class DocumentSession
             throw new ArgumentException($"Actor '{actorId}' does not exist.", nameof(actorId));
         }
 
+        if (_isRestoringSemanticSelection && _isDispatchingSemanticRollbackWork)
+        {
+            EnqueueSemanticRollbackWork(new DeferredActorSelection(actorId));
+            return;
+        }
+
+        var notification = ApplyActorSelection(actorId);
+        if (notification is not null)
+        {
+            PublishSessionNotification(notification);
+        }
+    }
+
+    private SessionNotificationBatch? ApplyActorSelection(string? actorId)
+    {
         if (SelectedActorId == actorId)
         {
-            return;
+            return null;
         }
 
         ClearPreview();
@@ -130,13 +149,13 @@ public sealed class DocumentSession
         var actionSelectionChange = RefreshSelectedActionKeyframeAtCurrentTime(forceNotification: true);
         var lockOnSelectionChange = RefreshSelectedLockOnKeyframeAtCurrentTime(forceNotification: true);
         var availabilityChanges = RefreshAllEditAvailabilityState();
-        RaiseAllSelectionAndAvailabilityChanged(
+        return new SessionNotificationBatch(
             transformSelectionChange,
             actionSelectionChange,
             lockOnSelectionChange,
             availabilityChanges.Transform,
-            availabilityChanges.Timeline);
-        SelectionChanged?.Invoke(this, new SelectionChangedEventArgs(SelectedActorId));
+            availabilityChanges.Timeline,
+            new SelectionChangedEventArgs(SelectedActorId));
     }
 
     public TransformKeyframe? GetSelectedTransform()
@@ -184,6 +203,11 @@ public sealed class DocumentSession
     public SceneEditResult SelectTransformKeyframe(string keyframeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
+        if (_isRestoringSemanticSelection)
+        {
+            return SceneEditResult.Conflict;
+        }
+
         var actor = GetSelectedActor();
         if (actor is null)
         {
@@ -204,6 +228,11 @@ public sealed class DocumentSession
     public SceneEditResult SelectActionKeyframe(string keyframeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
+        if (_isRestoringSemanticSelection)
+        {
+            return SceneEditResult.Conflict;
+        }
+
         var actorId = SelectedActorId;
         var keyframe = GetSelectedActor()?.ActionKeyframes.SingleOrDefault(frame => frame.Id == keyframeId);
         if (actorId is null || keyframe is null)
@@ -211,19 +240,24 @@ public sealed class DocumentSession
             return SceneEditResult.Conflict;
         }
 
+        var rollbackState = CaptureSemanticSelectionRollbackState();
+        var forceTrackRefresh = rollbackState.ActiveTrack != TimelineTrackKind.Action &&
+            SelectedActionKeyframeId == keyframeId &&
+            SameAction(_selectedActionKeyframe, keyframe);
+        ActiveTimelineTrack = TimelineTrackKind.Action;
         ClearPreview();
         Playback.Pause();
         keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
         if (keyframe is null)
         {
-            return SceneEditResult.Conflict;
+            return RestoreSemanticSelectionAfterConflict(rollbackState);
         }
 
         Playback.Seek(keyframe.TimeSeconds);
         keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
         if (keyframe is null)
         {
-            return SceneEditResult.Conflict;
+            return RestoreSemanticSelectionAfterConflict(rollbackState);
         }
 
         if (Math.Abs(Playback.CurrentTimeSeconds - keyframe.TimeSeconds) > EditTimeToleranceSeconds)
@@ -232,12 +266,13 @@ public sealed class DocumentSession
             keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
             if (keyframe is null)
             {
-                return SceneEditResult.Conflict;
+                return RestoreSemanticSelectionAfterConflict(rollbackState);
             }
         }
 
+        forceTrackRefresh |= ActiveTimelineTrack != TimelineTrackKind.Action;
         ActiveTimelineTrack = TimelineTrackKind.Action;
-        var selectionChange = SetSelectedActionKeyframe(keyframe);
+        var selectionChange = SetSelectedActionKeyframe(keyframe, forceTrackRefresh);
         var availabilityChanges = RefreshAllEditAvailabilityState();
         RaiseActionKeyframeSelectionChanged(selectionChange);
         RaiseEditAvailabilityChanged(availabilityChanges.Transform);
@@ -248,6 +283,11 @@ public sealed class DocumentSession
     public SceneEditResult SelectLockOnKeyframe(string keyframeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
+        if (_isRestoringSemanticSelection)
+        {
+            return SceneEditResult.Conflict;
+        }
+
         var actorId = SelectedActorId;
         var keyframe = GetSelectedActor()?.LockOnKeyframes.SingleOrDefault(frame => frame.Id == keyframeId);
         if (actorId is null || keyframe is null)
@@ -255,19 +295,24 @@ public sealed class DocumentSession
             return SceneEditResult.Conflict;
         }
 
+        var rollbackState = CaptureSemanticSelectionRollbackState();
+        var forceTrackRefresh = rollbackState.ActiveTrack != TimelineTrackKind.LockOn &&
+            SelectedLockOnKeyframeId == keyframeId &&
+            SameLockOn(_selectedLockOnKeyframe, keyframe);
+        ActiveTimelineTrack = TimelineTrackKind.LockOn;
         ClearPreview();
         Playback.Pause();
         keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
         if (keyframe is null)
         {
-            return SceneEditResult.Conflict;
+            return RestoreSemanticSelectionAfterConflict(rollbackState);
         }
 
         Playback.Seek(keyframe.TimeSeconds);
         keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
         if (keyframe is null)
         {
-            return SceneEditResult.Conflict;
+            return RestoreSemanticSelectionAfterConflict(rollbackState);
         }
 
         if (Math.Abs(Playback.CurrentTimeSeconds - keyframe.TimeSeconds) > EditTimeToleranceSeconds)
@@ -276,12 +321,13 @@ public sealed class DocumentSession
             keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
             if (keyframe is null)
             {
-                return SceneEditResult.Conflict;
+                return RestoreSemanticSelectionAfterConflict(rollbackState);
             }
         }
 
+        forceTrackRefresh |= ActiveTimelineTrack != TimelineTrackKind.LockOn;
         ActiveTimelineTrack = TimelineTrackKind.LockOn;
-        var selectionChange = SetSelectedLockOnKeyframe(keyframe);
+        var selectionChange = SetSelectedLockOnKeyframe(keyframe, forceTrackRefresh);
         var availabilityChanges = RefreshAllEditAvailabilityState();
         RaiseLockOnKeyframeSelectionChanged(selectionChange);
         RaiseEditAvailabilityChanged(availabilityChanges.Transform);
@@ -802,6 +848,7 @@ public sealed class DocumentSession
 
     private void OnPlaybackChanged(object? sender, PlaybackChangedEventArgs args)
     {
+        var playbackRequestVersion = Playback.StateRequestVersion;
         var transformSelectionChange = RefreshSelectedTransformKeyframeAtCurrentTime();
         var actionSelectionChange = RefreshSelectedActionKeyframeAtCurrentTime();
         var lockOnSelectionChange = RefreshSelectedLockOnKeyframeAtCurrentTime();
@@ -812,6 +859,11 @@ public sealed class DocumentSession
         }
         catch (Exception exception)
         {
+            if (_isRestoringSemanticSelection)
+            {
+                throw;
+            }
+
             CompleteMutationExceptionTransition(
                 exception,
                 () => RaiseAllSelectionAndAvailabilityChanged(
@@ -821,6 +873,18 @@ public sealed class DocumentSession
                     availabilityChanges.Transform,
                     availabilityChanges.Timeline));
             throw;
+        }
+
+        if (_isRestoringSemanticSelection)
+        {
+            return;
+        }
+
+        if (playbackRequestVersion != Playback.StateRequestVersion ||
+            args.CurrentTimeSeconds != Playback.CurrentTimeSeconds ||
+            args.IsPlaying != Playback.IsPlaying)
+        {
+            return;
         }
 
         RaiseAllSelectionAndAvailabilityChanged(
@@ -1107,11 +1171,107 @@ public sealed class DocumentSession
         EditAvailabilityChangedEventArgs? transformAvailabilityChange,
         TimelineEditAvailabilityChangedEventArgs? timelineAvailabilityChange)
     {
-        RaiseTransformKeyframeSelectionChanged(transformSelectionChange);
-        RaiseActionKeyframeSelectionChanged(actionSelectionChange);
-        RaiseLockOnKeyframeSelectionChanged(lockOnSelectionChange);
-        RaiseEditAvailabilityChanged(transformAvailabilityChange);
-        RaiseTimelineEditAvailabilityChanged(timelineAvailabilityChange);
+        PublishSessionNotification(new SessionNotificationBatch(
+            transformSelectionChange,
+            actionSelectionChange,
+            lockOnSelectionChange,
+            transformAvailabilityChange,
+            timelineAvailabilityChange,
+            null));
+    }
+
+    private void PublishSessionNotification(SessionNotificationBatch notification)
+    {
+        if (!_isRestoringSemanticSelection)
+        {
+            PublishSessionNotificationNow(notification);
+            return;
+        }
+
+        EnqueueSemanticRollbackWork(new DeferredSessionNotification(notification));
+        DrainSemanticRollbackWork();
+    }
+
+    private void EnqueueSemanticRollbackWork(SemanticRollbackWorkItem workItem)
+    {
+        if (_semanticRollbackWorkItems.Count >= MaxReconciliationAttempts)
+        {
+            throw new InvalidOperationException(
+                "Semantic selection rollback notifications did not stabilize.");
+        }
+
+        _semanticRollbackWorkItems.Enqueue(workItem);
+    }
+
+    private void DrainSemanticRollbackWork()
+    {
+        if (_isDispatchingSemanticRollbackWork)
+        {
+            return;
+        }
+
+        _isDispatchingSemanticRollbackWork = true;
+        try
+        {
+            ExceptionDispatchInfo? observerFailure = null;
+            for (var completedWork = 0; completedWork < MaxReconciliationAttempts; completedWork++)
+            {
+                if (_semanticRollbackWorkItems.Count == 0)
+                {
+                    observerFailure?.Throw();
+                    return;
+                }
+
+                try
+                {
+                    switch (_semanticRollbackWorkItems.Dequeue())
+                    {
+                        case DeferredSessionNotification deferredNotification:
+                            PublishSessionNotificationNow(deferredNotification.Notification);
+                            break;
+                        case DeferredActorSelection deferredActorSelection:
+                            var notification = ApplyActorSelection(deferredActorSelection.ActorId);
+                            if (notification is not null)
+                            {
+                                PublishSessionNotificationNow(notification);
+                            }
+
+                            break;
+                    }
+                }
+                catch (Exception exception)
+                {
+                    observerFailure ??= ExceptionDispatchInfo.Capture(exception);
+                }
+            }
+
+            if (_semanticRollbackWorkItems.Count == 0)
+            {
+                observerFailure?.Throw();
+                return;
+            }
+
+            throw new InvalidOperationException(
+                "Semantic selection rollback notifications did not stabilize.");
+        }
+        finally
+        {
+            _semanticRollbackWorkItems.Clear();
+            _isDispatchingSemanticRollbackWork = false;
+        }
+    }
+
+    private void PublishSessionNotificationNow(SessionNotificationBatch notification)
+    {
+        RaiseTransformKeyframeSelectionChanged(notification.TransformSelectionChange);
+        RaiseActionKeyframeSelectionChanged(notification.ActionSelectionChange);
+        RaiseLockOnKeyframeSelectionChanged(notification.LockOnSelectionChange);
+        RaiseEditAvailabilityChanged(notification.TransformAvailabilityChange);
+        RaiseTimelineEditAvailabilityChanged(notification.TimelineAvailabilityChange);
+        if (notification.ActorSelectionChange is not null)
+        {
+            SelectionChanged?.Invoke(this, new SelectionChangedEventArgs(SelectedActorId));
+        }
     }
 
     private (bool CanAdd, string? Reason) GetAddTransformKeyframeAvailability()
@@ -1322,6 +1482,198 @@ public sealed class DocumentSession
         SelectedActorId == actorId
             ? GetSelectedActor()?.LockOnKeyframes.SingleOrDefault(frame => frame.Id == keyframeId)
             : null;
+
+    private SemanticSelectionRollbackState CaptureSemanticSelectionRollbackState() => new(
+        SelectedActorId,
+        Playback.CurrentTimeSeconds,
+        Playback.IsPlaying,
+        ActiveTimelineTrack,
+        SelectedTransformKeyframeId,
+        SelectedActionKeyframeId,
+        SelectedLockOnKeyframeId);
+
+    private SceneEditResult RestoreSemanticSelectionAfterConflict(SemanticSelectionRollbackState rollbackState)
+    {
+        _isRestoringSemanticSelection = true;
+        try
+        {
+            for (var attempt = 0; attempt < MaxReconciliationAttempts; attempt++)
+            {
+                RestorePlaybackState(
+                    rollbackState.PlaybackTimeSeconds,
+                    rollbackState.PlaybackWasPlaying);
+                if (Math.Abs(Playback.CurrentTimeSeconds - rollbackState.PlaybackTimeSeconds) >
+                    EditTimeToleranceSeconds ||
+                    Playback.IsPlaying != rollbackState.PlaybackWasPlaying)
+                {
+                    continue;
+                }
+
+                var actor = GetSelectedActor();
+                var restoresOriginalActor = actor is not null && actor.ActorId == rollbackState.ActorId;
+                var desiredActiveTrack = restoresOriginalActor
+                    ? rollbackState.ActiveTrack
+                    : actor is null
+                        ? TimelineTrackKind.Transform
+                        : ActiveTimelineTrack;
+                ActiveTimelineTrack = desiredActiveTrack;
+                var transform = actor is null
+                    ? null
+                    : restoresOriginalActor
+                        ? FindTransformByRollbackId(actor, rollbackState.TransformKeyframeId)
+                        : SelectTransformAtTime(actor, rollbackState.PlaybackTimeSeconds);
+                var action = actor is null
+                    ? null
+                    : restoresOriginalActor
+                        ? FindActionByRollbackId(actor, rollbackState.ActionKeyframeId)
+                        : SelectActionAtTime(actor, rollbackState.PlaybackTimeSeconds);
+                var lockOn = actor is null
+                    ? null
+                    : restoresOriginalActor
+                        ? FindLockOnByRollbackId(actor, rollbackState.LockOnKeyframeId)
+                        : SelectLockOnAtTime(actor, rollbackState.PlaybackTimeSeconds);
+                var transformSelectionChange = SetSelectedTransformKeyframe(transform);
+                var actionSelectionChange = SetSelectedActionKeyframe(action);
+                var lockOnSelectionChange = SetSelectedLockOnKeyframe(lockOn);
+                var availabilityChanges = RefreshAllEditAvailabilityState();
+                var transformAvailabilityChange = availabilityChanges.Transform;
+                var timelineAvailabilityChange = availabilityChanges.Timeline;
+
+                if (actor is not null)
+                {
+                    transformSelectionChange ??= SetSelectedTransformKeyframe(
+                        transform,
+                        forceNotification: true);
+                    actionSelectionChange ??= SetSelectedActionKeyframe(
+                        action,
+                        forceNotification: true);
+                    lockOnSelectionChange ??= SetSelectedLockOnKeyframe(
+                        lockOn,
+                        forceNotification: true);
+                    transformAvailabilityChange ??= new EditAvailabilityChangedEventArgs(
+                        CanEditSelectedTransform,
+                        EditLockReason);
+                    timelineAvailabilityChange ??= new TimelineEditAvailabilityChangedEventArgs(
+                        ActionEditAvailability,
+                        LockOnEditAvailability);
+                }
+
+                var revisionBeforePublish = _document.Revision;
+                var actorIdBeforePublish = SelectedActorId;
+                RaiseAllSelectionAndAvailabilityChanged(
+                    transformSelectionChange,
+                    actionSelectionChange,
+                    lockOnSelectionChange,
+                    transformAvailabilityChange,
+                    timelineAvailabilityChange);
+                if (_document.Revision == revisionBeforePublish &&
+                    SelectedActorId == actorIdBeforePublish &&
+                    ActiveTimelineTrack == desiredActiveTrack &&
+                    Math.Abs(Playback.CurrentTimeSeconds - rollbackState.PlaybackTimeSeconds) <=
+                    EditTimeToleranceSeconds &&
+                    Playback.IsPlaying == rollbackState.PlaybackWasPlaying &&
+                    SelectedTransformKeyframeId == transform?.Id &&
+                    SelectedActionKeyframeId == action?.Id &&
+                    SelectedLockOnKeyframeId == lockOn?.Id &&
+                    SameOrBothNull(_selectedTransformKeyframe, transform) &&
+                    SameOrBothNull(_selectedActionKeyframe, action) &&
+                    SameOrBothNull(_selectedLockOnKeyframe, lockOn))
+                {
+                    return SceneEditResult.Conflict;
+                }
+            }
+        }
+        finally
+        {
+            _isRestoringSemanticSelection = false;
+        }
+
+        throw new InvalidOperationException("Semantic selection rollback did not stabilize.");
+    }
+
+    private void RestorePlaybackState(double timeSeconds, bool wasPlaying)
+    {
+        if (Playback.IsPlaying && !wasPlaying)
+        {
+            Playback.Pause();
+        }
+
+        Playback.Seek(timeSeconds);
+        if (Playback.IsPlaying != wasPlaying)
+        {
+            if (wasPlaying)
+            {
+                Playback.Play();
+            }
+            else
+            {
+                Playback.Pause();
+            }
+        }
+    }
+
+    private static TransformKeyframe? FindTransformByRollbackId(
+        ActorTrack actor,
+        string? keyframeId) => keyframeId is null
+            ? null
+            : actor.TransformKeyframes.SingleOrDefault(frame => frame.Id == keyframeId);
+
+    private static ActionKeyframe? FindActionByRollbackId(
+        ActorTrack actor,
+        string? keyframeId) => keyframeId is null
+            ? null
+            : actor.ActionKeyframes.SingleOrDefault(frame => frame.Id == keyframeId);
+
+    private static LockOnKeyframe? FindLockOnByRollbackId(
+        ActorTrack actor,
+        string? keyframeId) => keyframeId is null
+            ? null
+            : actor.LockOnKeyframes.SingleOrDefault(frame => frame.Id == keyframeId);
+
+    private static TransformKeyframe? SelectTransformAtTime(ActorTrack actor, double timeSeconds) =>
+        actor.TransformKeyframes.SingleOrDefault(frame => IsAtTime(frame.TimeSeconds, timeSeconds));
+
+    private static ActionKeyframe? SelectActionAtTime(ActorTrack actor, double timeSeconds) =>
+        actor.ActionKeyframes.SingleOrDefault(frame => IsAtTime(frame.TimeSeconds, timeSeconds));
+
+    private static LockOnKeyframe? SelectLockOnAtTime(ActorTrack actor, double timeSeconds) =>
+        actor.LockOnKeyframes.SingleOrDefault(frame => IsAtTime(frame.TimeSeconds, timeSeconds));
+
+    private static bool IsAtTime(double left, double right) =>
+        Math.Abs(left - right) <= EditTimeToleranceSeconds;
+
+    private static bool SameOrBothNull(TransformKeyframe? left, TransformKeyframe? right) =>
+        (left is null && right is null) || SameTransform(left, right);
+
+    private static bool SameOrBothNull(ActionKeyframe? left, ActionKeyframe? right) =>
+        (left is null && right is null) || SameAction(left, right);
+
+    private static bool SameOrBothNull(LockOnKeyframe? left, LockOnKeyframe? right) =>
+        (left is null && right is null) || SameLockOn(left, right);
+
+    private sealed record SemanticSelectionRollbackState(
+        string? ActorId,
+        double PlaybackTimeSeconds,
+        bool PlaybackWasPlaying,
+        TimelineTrackKind ActiveTrack,
+        string? TransformKeyframeId,
+        string? ActionKeyframeId,
+        string? LockOnKeyframeId);
+
+    private sealed record SessionNotificationBatch(
+        TransformKeyframeSelectionChangedEventArgs? TransformSelectionChange,
+        ActionKeyframeSelectionChangedEventArgs? ActionSelectionChange,
+        LockOnKeyframeSelectionChangedEventArgs? LockOnSelectionChange,
+        EditAvailabilityChangedEventArgs? TransformAvailabilityChange,
+        TimelineEditAvailabilityChangedEventArgs? TimelineAvailabilityChange,
+        SelectionChangedEventArgs? ActorSelectionChange);
+
+    private abstract record SemanticRollbackWorkItem;
+
+    private sealed record DeferredSessionNotification(SessionNotificationBatch Notification)
+        : SemanticRollbackWorkItem;
+
+    private sealed record DeferredActorSelection(string? ActorId) : SemanticRollbackWorkItem;
 
     private static bool SameTransform(TransformKeyframe? left, TransformKeyframe? right) =>
         left is not null && right is not null &&

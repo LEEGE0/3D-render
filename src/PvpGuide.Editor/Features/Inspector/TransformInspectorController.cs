@@ -187,9 +187,15 @@ public sealed class TransformInspectorController : IDisposable
 
     private void OnUndoPressed()
     {
-        if (!_session.CanEditSelectedTransform)
+        if (!_session.CanEditHistory)
         {
             ShowEditLockReason();
+            return;
+        }
+
+        if (!_session.CanUndo)
+        {
+            ShowError("실행 취소할 변경이 없습니다.");
             return;
         }
 
@@ -207,9 +213,15 @@ public sealed class TransformInspectorController : IDisposable
 
     private void OnRedoPressed()
     {
-        if (!_session.CanEditSelectedTransform)
+        if (!_session.CanEditHistory)
         {
             ShowEditLockReason();
+            return;
+        }
+
+        if (!_session.CanRedo)
+        {
+            ShowError("다시 실행할 변경이 없습니다.");
             return;
         }
 
@@ -438,8 +450,8 @@ public sealed class TransformInspectorController : IDisposable
 
     private void UpdateButtonStates()
     {
-        _undoButton.Disabled = !_session.CanEditSelectedTransform || !_session.CanUndo;
-        _redoButton.Disabled = !_session.CanEditSelectedTransform || !_session.CanRedo;
+        _undoButton.Disabled = !_session.CanEditHistory || !_session.CanUndo;
+        _redoButton.Disabled = !_session.CanEditHistory || !_session.CanRedo;
     }
 
     private void RefreshEditAvailabilityPresentation()
