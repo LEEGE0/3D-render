@@ -37,7 +37,9 @@ public partial class Main : Control
         {
             if (GetNodeOrNull<Control>(panelName) is null)
             {
-                GD.PushError($"필수 패널이 없습니다: {panelName}");
+                FailRuntimeVerification(
+                    "startup-required-panels",
+                    new InvalidOperationException($"필수 패널이 없습니다: {panelName}"));
                 return;
             }
         }
@@ -78,13 +80,15 @@ public partial class Main : Control
             addKeyframeButton is null || deleteKeyframeButton is null || timeSlider is null ||
             currentTimeLabel is null || timelineStatus is null)
         {
-            GD.PushError("타임라인과 기본 편집 UI에 필요한 자식 노드가 없습니다.");
+            FailRuntimeVerification(
+                "startup-required-children",
+                new InvalidOperationException("타임라인과 기본 편집 UI에 필요한 자식 노드가 없습니다."));
             return;
         }
 
         GD.Print("PROJECT_RUNTIME_READY");
 
-        var document = new SceneDocument("main-runtime", 1, 30);
+        var document = new SceneDocument("main-runtime", 1, 20);
         document.AddActor(new ActorTrack(
             "runtime-actor",
             "Runtime Actor",
@@ -501,8 +505,9 @@ public partial class Main : Control
 
         try
         {
-            Require(IsNear(timeInput.Step, 1d / 30d),
-                "TimeInput이 장면의 1/30 프레임 단계를 유지하지 않았습니다.");
+            Require(IsNear(timeInput.Step, 1d / session.Playback.FramesPerSecond) &&
+                    IsNear(timeInput.Step, 1d / 20d),
+                "TimeInput이 세션 FPS의 프레임 단계를 유지하지 않았습니다.");
             Require(revisionBefore == 4 && topApplyCountBefore == 4 && worldApplyCountBefore == 4,
                 "기본 편집 검사가 revision/top/world 4에서 끝나지 않았습니다.");
             Require(actorBefore.TransformKeyframes.Count == 2 &&
@@ -779,9 +784,17 @@ public partial class Main : Control
                     topViewSurface.ApplyCount == 11 && worldAdapter.ApplyCount == 11,
                 "Add pose TopView hit이 projection 또는 history를 변경했습니다.");
 
-            ClickTransformMarker(transformTrackSurface, 0);
-            Require(session.SelectedTransformKeyframeId == originId && IsNear(session.Playback.CurrentTimeSeconds, 0),
-                "기존 marker 실제 click이 origin을 선택하지 않았습니다.");
+            undoButton.EmitSignal(Button.SignalName.Pressed);
+            Require(document.Revision == 6 && historyEvents == 2 && session.CanRedo && !redoButton.Disabled &&
+                    session.SelectedTransformKeyframeId == originId && IsNear(session.Playback.CurrentTimeSeconds, 0) &&
+                    document.Actors.Single(actor => actor.ActorId == actorId).TransformKeyframes.All(frame => frame.Id != addedId),
+                "Add Undo 뒤 nearest marker reconciliation과 즉시 Redo 가능한 상태를 만들지 않았습니다.");
+            redoButton.EmitSignal(Button.SignalName.Pressed);
+            Require(document.Revision == 7 && historyEvents == 3 && !session.CanRedo &&
+                    session.SelectedTransformKeyframeId == originId && IsNear(session.Playback.CurrentTimeSeconds, 0) &&
+                    document.GetTransformKeyframe(actorId, addedId) == added,
+                "Add Redo가 marker 보정 click 없이 키프레임을 복원하지 않았습니다.");
+
             ClickTransformMarker(transformTrackSurface, 0.5);
             Require(session.SelectedTransformKeyframeId == addedId && IsNear(session.Playback.CurrentTimeSeconds, 0.5) &&
                     selectedKeyframeLabel.Text.Contains(addedId, StringComparison.Ordinal) &&
@@ -789,8 +802,8 @@ public partial class Main : Control
                     IsNear(timeInput.Value, 0.5) && IsNear(xInput.Value, 3) && IsNear(yInput.Value, 1) &&
                     IsNear(zInput.Value, -2) && IsNear(yawInput.Value, 45),
                 "생성 marker 실제 click이 selection과 Inspector ID/time/pose를 동기화하지 않았습니다.");
-            Require(topViewSurface.ApplyCount == 13 && worldAdapter.ApplyCount == 13,
-                "두 marker click의 seek가 두 view에 같은 횟수로 반영되지 않았습니다.");
+            Require(topViewSurface.ApplyCount == 15 && worldAdapter.ApplyCount == 15,
+                "Add Undo/Redo와 marker click이 두 view에 같은 횟수로 반영되지 않았습니다.");
 
             timeInput.Value = 0.6;
             xInput.Value = 3.5;
@@ -800,7 +813,7 @@ public partial class Main : Control
             var revisionBeforeUpdate = document.Revision;
             applyButton.EmitSignal(Button.SignalName.Pressed);
             var updated = document.GetTransformKeyframe(actorId, addedId);
-            Require(revisionBeforeUpdate == 5 && document.Revision == 6 && historyEvents == 2 &&
+            Require(revisionBeforeUpdate == 7 && document.Revision == 8 && historyEvents == 4 &&
                     IsNear(updated.TimeSeconds, 0.6) && IsPosition(updated.Position, 3.5, 1.5, -2.5) &&
                     IsNear(updated.YawDegrees, 60) &&
                     session.SelectedTransformKeyframeId == addedId &&
@@ -813,11 +826,11 @@ public partial class Main : Control
                 topViewSurface,
                 worldAdapter,
                 actorRoot,
-                expectedRevision: 6,
+                expectedRevision: 8,
                 expectedTimeSeconds: 0.6,
                 expectedPosition: new Position3(3.5, 1.5, -2.5),
                 expectedYawDegrees: 60,
-                expectedApplyCount: 15,
+                expectedApplyCount: 17,
                 "원자적 update 뒤 moved-time snapshot");
             RequireTopViewBodyHitAt(
                 session,
@@ -826,65 +839,22 @@ public partial class Main : Control
                 pointerOffset: new ScreenPoint(8, -8),
                 expectedKeyframeId: addedId,
                 "Update pose TopView hit");
-            Require(document.Revision == 6 && historyEvents == 2 &&
-                    topViewSurface.ApplyCount == 15 && worldAdapter.ApplyCount == 15,
+            Require(document.Revision == 8 && historyEvents == 4 &&
+                    topViewSurface.ApplyCount == 17 && worldAdapter.ApplyCount == 17,
                 "Update pose TopView hit이 projection 또는 history를 변경했습니다.");
 
             undoButton.EmitSignal(Button.SignalName.Pressed);
             var restoredBeforeUpdate = document.GetTransformKeyframe(actorId, addedId);
-            Require(document.Revision == 7 && historyEvents == 3 && session.CanRedo &&
+            Require(document.Revision == 9 && historyEvents == 5 && session.CanRedo && !redoButton.Disabled &&
+                    session.SelectedTransformKeyframeId == addedId && IsNear(session.Playback.CurrentTimeSeconds, 0.5) &&
                     IsNear(restoredBeforeUpdate.TimeSeconds, 0.5) &&
                     IsPosition(restoredBeforeUpdate.Position, 3, 1, -2) &&
                     IsNear(restoredBeforeUpdate.YawDegrees, 45),
                 "Undo button이 update preimage를 복원하지 않았습니다.");
-            ClickTransformMarker(transformTrackSurface, 0.5);
             Require(!redoButton.Disabled && session.SelectedTransformKeyframeId == addedId &&
                     IsNear(timeInput.Value, 0.5) && IsNear(xInput.Value, 3) && IsNear(yInput.Value, 1) &&
                     IsNear(zInput.Value, -2) && IsNear(yawInput.Value, 45),
-                "Undo 뒤 restored marker와 Inspector가 preimage를 표시하지 않았습니다.");
-            RequireProjectedSnapshot(
-                document,
-                session,
-                topViewSurface,
-                worldAdapter,
-                actorRoot,
-                expectedRevision: 7,
-                expectedTimeSeconds: 0.5,
-                expectedPosition: new Position3(3, 1, -2),
-                expectedYawDegrees: 45,
-                expectedApplyCount: 17,
-                "update Undo 뒤 restored snapshot");
-
-            redoButton.EmitSignal(Button.SignalName.Pressed);
-            var redoneUpdate = document.GetTransformKeyframe(actorId, addedId);
-            Require(document.Revision == 8 && historyEvents == 4 && !session.CanRedo &&
-                    IsNear(redoneUpdate.TimeSeconds, 0.6) &&
-                    IsPosition(redoneUpdate.Position, 3.5, 1.5, -2.5) &&
-                    IsNear(redoneUpdate.YawDegrees, 60),
-                "Redo button이 moved-time update를 재적용하지 않았습니다.");
-            ClickTransformMarker(transformTrackSurface, 0.6);
-            Require(session.SelectedTransformKeyframeId == addedId &&
-                    IsNear(timeInput.Value, 0.6) && IsNear(xInput.Value, 3.5) && IsNear(yInput.Value, 1.5) &&
-                    IsNear(zInput.Value, -2.5) && IsNear(yawInput.Value, 60),
-                "Redo 뒤 moved marker와 Inspector가 postimage를 표시하지 않았습니다.");
-            RequireProjectedSnapshot(
-                document,
-                session,
-                topViewSurface,
-                worldAdapter,
-                actorRoot,
-                expectedRevision: 8,
-                expectedTimeSeconds: 0.6,
-                expectedPosition: new Position3(3.5, 1.5, -2.5),
-                expectedYawDegrees: 60,
-                expectedApplyCount: 19,
-                "update Redo 뒤 moved snapshot");
-
-            deleteKeyframeButton.EmitSignal(Button.SignalName.Pressed);
-            Require(document.Revision == 9 && historyEvents == 5 &&
-                    document.Actors.Single(actor => actor.ActorId == actorId).TransformKeyframes.Count == 2 &&
-                    session.SelectedTransformKeyframeId == endId && IsNear(session.Playback.CurrentTimeSeconds, 1),
-                "Delete button이 선택 keyframe을 삭제하고 가장 가까운 remaining marker를 선택하지 않았습니다.");
+                "Undo 뒤 marker 보정 click 없이 restored marker와 Inspector가 preimage를 표시하지 않았습니다.");
             RequireProjectedSnapshot(
                 document,
                 session,
@@ -892,19 +862,24 @@ public partial class Main : Control
                 worldAdapter,
                 actorRoot,
                 expectedRevision: 9,
-                expectedTimeSeconds: 1,
-                expectedPosition: new Position3(5, 2, -4),
-                expectedYawDegrees: 90,
-                expectedApplyCount: 21,
-                "Delete 뒤 nearest snapshot");
+                expectedTimeSeconds: 0.5,
+                expectedPosition: new Position3(3, 1, -2),
+                expectedYawDegrees: 45,
+                expectedApplyCount: 19,
+                "update Undo 뒤 restored snapshot");
 
-            undoButton.EmitSignal(Button.SignalName.Pressed);
-            Require(document.Revision == 10 && historyEvents == 6 && session.CanRedo &&
-                    IsNear(document.GetTransformKeyframe(actorId, addedId).TimeSeconds, 0.6),
-                "Delete Undo가 삭제된 keyframe을 복원하지 않았습니다.");
-            ClickTransformMarker(transformTrackSurface, 0.6);
-            Require(session.SelectedTransformKeyframeId == addedId && !redoButton.Disabled,
-                "Delete Undo 뒤 복원 marker를 실제 click으로 선택하지 못했습니다.");
+            redoButton.EmitSignal(Button.SignalName.Pressed);
+            var redoneUpdate = document.GetTransformKeyframe(actorId, addedId);
+            Require(document.Revision == 10 && historyEvents == 6 && !session.CanRedo &&
+                    session.SelectedTransformKeyframeId == addedId && IsNear(session.Playback.CurrentTimeSeconds, 0.6) &&
+                    IsNear(redoneUpdate.TimeSeconds, 0.6) &&
+                    IsPosition(redoneUpdate.Position, 3.5, 1.5, -2.5) &&
+                    IsNear(redoneUpdate.YawDegrees, 60),
+                "Redo button이 moved-time update를 재적용하지 않았습니다.");
+            Require(session.SelectedTransformKeyframeId == addedId &&
+                    IsNear(timeInput.Value, 0.6) && IsNear(xInput.Value, 3.5) && IsNear(yInput.Value, 1.5) &&
+                    IsNear(zInput.Value, -2.5) && IsNear(yawInput.Value, 60),
+                "Redo 뒤 marker 보정 click 없이 moved marker와 Inspector가 postimage를 표시하지 않았습니다.");
             RequireProjectedSnapshot(
                 document,
                 session,
@@ -915,14 +890,14 @@ public partial class Main : Control
                 expectedTimeSeconds: 0.6,
                 expectedPosition: new Position3(3.5, 1.5, -2.5),
                 expectedYawDegrees: 60,
-                expectedApplyCount: 23,
-                "Delete Undo 뒤 restored snapshot");
+                expectedApplyCount: 21,
+                "update Redo 뒤 moved snapshot");
 
-            redoButton.EmitSignal(Button.SignalName.Pressed);
-            Require(document.Revision == 11 && historyEvents == 7 && !session.CanRedo &&
+            deleteKeyframeButton.EmitSignal(Button.SignalName.Pressed);
+            Require(document.Revision == 11 && historyEvents == 7 &&
                     document.Actors.Single(actor => actor.ActorId == actorId).TransformKeyframes.Count == 2 &&
-                    document.Actors.Single(actor => actor.ActorId == actorId).TransformKeyframes.All(frame => frame.Id != addedId),
-                "Delete Redo가 복원된 keyframe을 재삭제하지 않았습니다.");
+                    session.SelectedTransformKeyframeId == endId && IsNear(session.Playback.CurrentTimeSeconds, 1),
+                "Delete button이 선택 keyframe을 삭제하고 가장 가까운 remaining marker를 선택하지 않았습니다.");
             RequireProjectedSnapshot(
                 document,
                 session,
@@ -930,17 +905,54 @@ public partial class Main : Control
                 worldAdapter,
                 actorRoot,
                 expectedRevision: 11,
-                expectedTimeSeconds: 0.6,
-                expectedPosition: new Position3(3.4, 1.2, -2.4),
-                expectedYawDegrees: 54,
+                expectedTimeSeconds: 1,
+                expectedPosition: new Position3(5, 2, -4),
+                expectedYawDegrees: 90,
+                expectedApplyCount: 23,
+                "Delete 뒤 nearest snapshot");
+
+            undoButton.EmitSignal(Button.SignalName.Pressed);
+            Require(document.Revision == 12 && historyEvents == 8 && session.CanRedo && !redoButton.Disabled &&
+                    IsNear(document.GetTransformKeyframe(actorId, addedId).TimeSeconds, 0.6) &&
+                    session.SelectedTransformKeyframeId == endId && IsNear(session.Playback.CurrentTimeSeconds, 1),
+                "Delete Undo가 선택을 보존하면서 marker 보정 click 없이 즉시 Redo 가능한 상태를 만들지 않았습니다.");
+            RequireProjectedSnapshot(
+                document,
+                session,
+                topViewSurface,
+                worldAdapter,
+                actorRoot,
+                expectedRevision: 12,
+                expectedTimeSeconds: 1,
+                expectedPosition: new Position3(5, 2, -4),
+                expectedYawDegrees: 90,
                 expectedApplyCount: 24,
-                "Delete Redo 뒤 interpolated snapshot");
+                "Delete Undo 뒤 restored snapshot");
+
+            redoButton.EmitSignal(Button.SignalName.Pressed);
+            Require(document.Revision == 13 && historyEvents == 9 && !session.CanRedo &&
+                    document.Actors.Single(actor => actor.ActorId == actorId).TransformKeyframes.Count == 2 &&
+                    document.Actors.Single(actor => actor.ActorId == actorId).TransformKeyframes.All(frame => frame.Id != addedId) &&
+                    session.SelectedTransformKeyframeId == endId && IsNear(session.Playback.CurrentTimeSeconds, 1),
+                "Delete Redo가 marker 보정 click 없이 복원된 keyframe을 재삭제하지 않았습니다.");
+            RequireProjectedSnapshot(
+                document,
+                session,
+                topViewSurface,
+                worldAdapter,
+                actorRoot,
+                expectedRevision: 13,
+                expectedTimeSeconds: 1,
+                expectedPosition: new Position3(5, 2, -4),
+                expectedYawDegrees: 90,
+                expectedApplyCount: 25,
+                "Delete Redo 뒤 preserved selection snapshot");
 
             ClickTransformMarker(transformTrackSurface, 1);
             var revisionBeforeDuplicate = document.Revision;
             var historyBeforeDuplicate = historyEvents;
             addKeyframeButton.EmitSignal(Button.SignalName.Pressed);
-            Require(revisionBeforeDuplicate == 11 && document.Revision == revisionBeforeDuplicate &&
+            Require(revisionBeforeDuplicate == 13 && document.Revision == revisionBeforeDuplicate &&
                     historyEvents == historyBeforeDuplicate && addKeyframeButton.Disabled &&
                     timelineStatus.Text.Contains("추가 실패", StringComparison.Ordinal) &&
                     timelineStatus.Text.Contains("이미", StringComparison.Ordinal),
@@ -948,7 +960,7 @@ public partial class Main : Control
 
             timeInput.Value = 1.1;
             applyButton.EmitSignal(Button.SignalName.Pressed);
-            Require(IsNear(timeInput.Value, 1.1) && document.Revision == 11 && historyEvents == 7 &&
+            Require(IsNear(timeInput.Value, 1.1) && document.Revision == 13 && historyEvents == 9 &&
                     errorLabel.Text.Contains("범위", StringComparison.Ordinal) &&
                     topViewSurface.ApplyCount == 25 && worldAdapter.ApplyCount == 25,
                 "범위 밖 TimeInput Apply가 입력을 보존한 채 문서/history/snapshot을 거부하지 않았습니다.");
@@ -959,12 +971,12 @@ public partial class Main : Control
             var externalEnd = new TransformKeyframe(endId, 1, new Position3(4.5, 2.5, -3.5), 75);
             Require(document.UpdateTransformKeyframe(actorId, endBeforeExternal, externalEnd),
                 "stale preimage 검증용 외부 변경이 적용되지 않았습니다.");
-            Require(document.Revision == 12 && historyEvents == 7 &&
+            Require(document.Revision == 14 && historyEvents == 9 &&
                     topViewSurface.ApplyCount == 26 && worldAdapter.ApplyCount == 26,
                 "외부 변경이 revision/projection만 한 번 갱신하지 않았습니다.");
             applyButton.EmitSignal(Button.SignalName.Pressed);
             var committedAfterStaleApply = document.GetTransformKeyframe(actorId, endId);
-            Require(document.Revision == 12 && historyEvents == 7 &&
+            Require(document.Revision == 14 && historyEvents == 9 &&
                     IsPosition(committedAfterStaleApply.Position, 4.5, 2.5, -3.5) &&
                     IsNear(committedAfterStaleApply.YawDegrees, 75) &&
                     errorLabel.Text.Contains("오래", StringComparison.Ordinal),
@@ -975,7 +987,7 @@ public partial class Main : Control
                 topViewSurface,
                 worldAdapter,
                 actorRoot,
-                expectedRevision: 12,
+                expectedRevision: 14,
                 expectedTimeSeconds: 1,
                 expectedPosition: new Position3(4.5, 2.5, -3.5),
                 expectedYawDegrees: 75,
@@ -995,7 +1007,7 @@ public partial class Main : Control
             var previewClearsBeforeScrub = previewClears;
             timeSlider.Value = 0.8;
             Require(previewClears == previewClearsBeforeScrub + 1 &&
-                    document.Revision == 12 && historyEvents == 7 &&
+                    document.Revision == 14 && historyEvents == 9 &&
                     session.SelectedTransformKeyframeId is null,
                 "활성 Inspector preview 뒤 scrub이 preview/selection을 정확히 취소하지 않았습니다.");
             RequireProjectedSnapshot(
@@ -1004,7 +1016,7 @@ public partial class Main : Control
                 topViewSurface,
                 worldAdapter,
                 actorRoot,
-                expectedRevision: 12,
+                expectedRevision: 14,
                 expectedTimeSeconds: 0.8,
                 expectedPosition: new Position3(3.8, 2, -2.8),
                 expectedYawDegrees: 60,
@@ -1013,7 +1025,7 @@ public partial class Main : Control
 
             ClickTransformMarker(transformTrackSurface, 1);
             deleteKeyframeButton.EmitSignal(Button.SignalName.Pressed);
-            Require(document.Revision == 13 && historyEvents == 8 &&
+            Require(document.Revision == 15 && historyEvents == 10 &&
                     document.Actors.Single(actor => actor.ActorId == actorId).TransformKeyframes.Count == 1 &&
                     session.SelectedTransformKeyframeId == originId && IsNear(session.Playback.CurrentTimeSeconds, 0) &&
                     deleteKeyframeButton.Disabled &&
@@ -1025,7 +1037,7 @@ public partial class Main : Control
                 topViewSurface,
                 worldAdapter,
                 actorRoot,
-                expectedRevision: 13,
+                expectedRevision: 15,
                 expectedTimeSeconds: 0,
                 expectedPosition: new Position3(1, 0, 0),
                 expectedYawDegrees: 0,
@@ -1033,7 +1045,7 @@ public partial class Main : Control
                 "마지막 keyframe guard 전 snapshot");
 
             deleteKeyframeButton.EmitSignal(Button.SignalName.Pressed);
-            Require(document.Revision == 13 && historyEvents == 8 &&
+            Require(document.Revision == 15 && historyEvents == 10 &&
                     document.Actors.Single(actor => actor.ActorId == actorId).TransformKeyframes.Count == 1 &&
                     timelineStatus.Text.Contains("삭제 실패", StringComparison.Ordinal) &&
                     timelineStatus.Text.Contains("마지막", StringComparison.Ordinal) &&
@@ -1075,7 +1087,7 @@ public partial class Main : Control
                 topViewSurface,
                 new ScreenPoint(originCenter.X + 40, originCenter.Y),
                 pressed: false);
-            Require(document.Revision == 13 && historyEvents == 8 &&
+            Require(document.Revision == 15 && historyEvents == 10 &&
                     IsPosition(document.GetTransformKeyframe(actorId, originId).Position, 1, 0, 0) &&
                     topViewSurface.ApplyCount == 32 && worldAdapter.ApplyCount == 32 &&
                     IsPosition(actorRoot.Position, 1, 0, 0),
@@ -1083,7 +1095,7 @@ public partial class Main : Control
 
             playPauseButton.EmitSignal(Button.SignalName.Pressed);
             Require(!session.Playback.IsPlaying && session.CanEditSelectedTransform &&
-                    document.Revision == 13 && historyEvents == 8 &&
+                    document.Revision == 15 && historyEvents == 10 &&
                     topViewSurface.ApplyCount == 32 && worldAdapter.ApplyCount == 32,
                 "재생 해제가 같은 (revision,time) snapshot을 중복 적용하거나 history를 변경했습니다.");
             RequirePreviewInactive(session);

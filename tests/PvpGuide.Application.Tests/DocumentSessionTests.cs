@@ -766,9 +766,16 @@ public sealed class DocumentSessionTests
         Assert.True(session.Undo());
         Assert.DoesNotContain(document.Actors.Single(actor => actor.ActorId == "host").TransformKeyframes,
             frame => frame.Id == added.Id);
+        Assert.Equal("host-first", session.SelectedTransformKeyframeId);
+        Assert.Equal(0, session.Playback.CurrentTimeSeconds);
+        Assert.True(session.CanEditSelectedTransform);
+        Assert.True(session.CanRedo);
         Assert.True(session.Redo());
         Assert.Contains(document.Actors.Single(actor => actor.ActorId == "host").TransformKeyframes,
             frame => frame.Id == added.Id);
+        Assert.Equal("host-first", session.SelectedTransformKeyframeId);
+        Assert.Equal(0, session.Playback.CurrentTimeSeconds);
+        Assert.True(session.CanEditSelectedTransform);
         Assert.Equal(3, document.Revision);
     }
 
@@ -788,8 +795,15 @@ public sealed class DocumentSessionTests
         Assert.Equal(2, session.Playback.CurrentTimeSeconds);
         Assert.True(session.Undo());
         Assert.Equal(0, document.GetTransformKeyframe("host", "host-first").TimeSeconds);
+        Assert.Equal("host-first", session.SelectedTransformKeyframeId);
+        Assert.Equal(0, session.Playback.CurrentTimeSeconds);
+        Assert.True(session.CanEditSelectedTransform);
+        Assert.True(session.CanRedo);
         Assert.True(session.Redo());
         Assert.Equal(2, document.GetTransformKeyframe("host", "host-first").TimeSeconds);
+        Assert.Equal("host-first", session.SelectedTransformKeyframeId);
+        Assert.Equal(2, session.Playback.CurrentTimeSeconds);
+        Assert.True(session.CanEditSelectedTransform);
         Assert.Equal(3, document.Revision);
     }
 
@@ -809,10 +823,93 @@ public sealed class DocumentSessionTests
         Assert.Contains(document.Actors.Single(actor => actor.ActorId == "host").TransformKeyframes,
             frame => frame.Id == "host-first");
         Assert.Equal(added, document.GetTransformKeyframe("host", added.Id));
+        Assert.Equal("host-first", session.SelectedTransformKeyframeId);
+        Assert.Equal(0, session.Playback.CurrentTimeSeconds);
+        Assert.True(session.CanRedo);
         Assert.True(session.Redo());
         Assert.DoesNotContain(document.Actors.Single(actor => actor.ActorId == "host").TransformKeyframes,
             frame => frame.Id == added.Id);
+        Assert.Equal("host-first", session.SelectedTransformKeyframeId);
+        Assert.Equal(0, session.Playback.CurrentTimeSeconds);
         Assert.Equal(4, document.Revision);
+    }
+
+    [Fact]
+    public void Transform_keyframe_add_reconciles_actual_state_after_history_observer_undoes_the_add()
+    {
+        var session = CreateSession(out var document);
+        session.SelectActor("host");
+        Assert.True(session.Playback.Seek(2));
+        AssertReconciliationPayloadsStayCurrent(session, document);
+        var observerRan = false;
+        session.HistoryChanged += (_, _) =>
+        {
+            if (!observerRan)
+            {
+                observerRan = true;
+                Assert.True(session.Undo());
+            }
+        };
+
+        Assert.Equal(SceneEditResult.Applied, session.AddTransformKeyframeAtCurrentTime());
+
+        Assert.DoesNotContain(document.Actors.Single(actor => actor.ActorId == "host").TransformKeyframes,
+            frame => frame.Id == "host-transform-0001");
+        AssertSessionSelectionAndAvailabilityMatchDocument(session, document, "host-first", 0);
+        Assert.False(session.CanUndo);
+        Assert.True(session.CanRedo);
+    }
+
+    [Fact]
+    public void Transform_keyframe_update_reconciles_actual_state_after_history_observer_undoes_the_update()
+    {
+        var session = CreateSession(out var document);
+        session.SelectActor("host");
+        var original = document.GetTransformKeyframe("host", "host-first");
+        AssertReconciliationPayloadsStayCurrent(session, document);
+        var observerRan = false;
+        session.HistoryChanged += (_, _) =>
+        {
+            if (!observerRan)
+            {
+                observerRan = true;
+                Assert.True(session.Undo());
+            }
+        };
+
+        Assert.Equal(
+            SceneEditResult.Applied,
+            session.UpdateSelectedTransformKeyframe(2, new Position3(8, 2, 9), 90));
+
+        Assert.Equal(original, document.GetTransformKeyframe("host", "host-first"));
+        AssertSessionSelectionAndAvailabilityMatchDocument(session, document, "host-first", 0);
+        Assert.False(session.CanUndo);
+        Assert.True(session.CanRedo);
+    }
+
+    [Fact]
+    public void Transform_keyframe_delete_reconciles_actual_state_after_history_observer_undoes_the_delete()
+    {
+        var session = CreateSession(out var document);
+        session.SelectActor("host");
+        var original = document.GetTransformKeyframe("host", "host-first");
+        AssertReconciliationPayloadsStayCurrent(session, document);
+        var observerRan = false;
+        session.HistoryChanged += (_, _) =>
+        {
+            if (!observerRan)
+            {
+                observerRan = true;
+                Assert.True(session.Undo());
+            }
+        };
+
+        Assert.Equal(SceneEditResult.Applied, session.RemoveSelectedTransformKeyframe());
+
+        Assert.Equal(original, document.GetTransformKeyframe("host", "host-first"));
+        AssertSessionSelectionAndAvailabilityMatchDocument(session, document, "host-first", 0);
+        Assert.False(session.CanUndo);
+        Assert.True(session.CanRedo);
     }
 
     [Fact]
@@ -973,8 +1070,14 @@ public sealed class DocumentSessionTests
 
         Assert.Throws<ChangedObserverException>(() => session.Undo());
         AssertSelectionExistsInDocument(session, document);
+        Assert.Equal("host-first", session.SelectedTransformKeyframeId);
+        Assert.Equal(0, session.Playback.CurrentTimeSeconds);
+        Assert.True(session.CanRedo);
         Assert.Throws<ChangedObserverException>(() => session.Redo());
         AssertSelectionExistsInDocument(session, document);
+        Assert.Equal("host-first", session.SelectedTransformKeyframeId);
+        Assert.Equal(0, session.Playback.CurrentTimeSeconds);
+        Assert.False(session.CanRedo);
     }
 
     [Fact]
@@ -1035,6 +1138,45 @@ public sealed class DocumentSessionTests
         var keyframeId = Assert.IsType<string>(session.SelectedTransformKeyframeId);
         var selected = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
         Assert.Equal(document.GetTransformKeyframe(session.SelectedActorId!, keyframeId), selected);
+    }
+
+    private static void AssertSessionSelectionAndAvailabilityMatchDocument(
+        DocumentSession session,
+        SceneDocument document,
+        string expectedKeyframeId,
+        double expectedTimeSeconds)
+    {
+        Assert.Equal(expectedKeyframeId, session.SelectedTransformKeyframeId);
+        var selected = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        Assert.Equal(document.GetTransformKeyframe("host", expectedKeyframeId), selected);
+        Assert.Equal(expectedTimeSeconds, session.Playback.CurrentTimeSeconds);
+        Assert.True(session.CanEditSelectedTransform);
+        Assert.False(session.CanAddTransformKeyframe);
+        Assert.True(session.CanDeleteSelectedTransformKeyframe);
+    }
+
+    private static void AssertReconciliationPayloadsStayCurrent(
+        DocumentSession session,
+        SceneDocument document)
+    {
+        session.TransformKeyframeSelectionChanged += (_, args) =>
+        {
+            Assert.Equal(session.SelectedActorId, args.ActorId);
+            Assert.Equal(session.SelectedTransformKeyframeId, args.KeyframeId);
+            if (args.KeyframeId is null)
+            {
+                Assert.Null(args.Keyframe);
+            }
+            else
+            {
+                Assert.Equal(document.GetTransformKeyframe(args.ActorId!, args.KeyframeId), args.Keyframe);
+            }
+        };
+        session.EditAvailabilityChanged += (_, args) =>
+        {
+            Assert.Equal(session.CanEditSelectedTransform, args.CanEditSelectedTransform);
+            Assert.Equal(session.EditLockReason, args.EditLockReason);
+        };
     }
 
     private static DocumentSession CreateSession(out SceneDocument document)

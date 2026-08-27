@@ -2,6 +2,11 @@ namespace PvpGuide.Editor.Features.Timeline;
 
 public sealed record TransformTrackMarker(string Id, double TimeSeconds, double X);
 
+public sealed record TransformTrackMarkerState(
+    TransformTrackMarker Marker,
+    bool IsSelected,
+    bool IsAtCurrentTime);
+
 public static class TransformTrackLayout
 {
     public static IReadOnlyList<TransformTrackMarker> CreateMarkers(
@@ -72,6 +77,27 @@ public static class TransformTrackLayout
         }
 
         return best?.Id;
+    }
+
+    public static IReadOnlyList<TransformTrackMarkerState> CreateMarkerStates(
+        IReadOnlyList<TransformTrackMarker> markers,
+        string? selectedKeyframeId,
+        double currentTimeSeconds,
+        double timeToleranceSeconds)
+    {
+        ArgumentNullException.ThrowIfNull(markers);
+        if (!double.IsFinite(currentTimeSeconds))
+        {
+            throw new ArgumentOutOfRangeException(nameof(currentTimeSeconds));
+        }
+
+        ValidateFiniteNonNegative(timeToleranceSeconds, nameof(timeToleranceSeconds));
+        return markers
+            .Select(marker => new TransformTrackMarkerState(
+                marker,
+                marker.Id == selectedKeyframeId,
+                Math.Abs(marker.TimeSeconds - currentTimeSeconds) <= timeToleranceSeconds))
+            .ToArray();
     }
 
     private static void ValidateFiniteNonNegative(double value, string parameterName)

@@ -164,9 +164,6 @@ public sealed class DocumentSession
             return result;
         }
 
-        var keyframeSelectionChange = SetSelectedTransformKeyframe(keyframe);
-        UpdateEditAvailability();
-        RaiseTransformKeyframeSelectionChanged(keyframeSelectionChange);
         return SceneEditResult.Applied;
     }
 
@@ -200,10 +197,6 @@ public sealed class DocumentSession
             return result;
         }
 
-        var keyframeSelectionChange = SetSelectedTransformKeyframe(after);
-        Playback.Seek(after.TimeSeconds);
-        UpdateEditAvailability();
-        RaiseTransformKeyframeSelectionChanged(keyframeSelectionChange);
         return SceneEditResult.Applied;
     }
 
@@ -222,15 +215,6 @@ public sealed class DocumentSession
             return result;
         }
 
-        var next = GetSelectedActor()!.TransformKeyframes
-            .OrderBy(frame => Math.Abs(frame.TimeSeconds - before.TimeSeconds))
-            .ThenBy(frame => frame.TimeSeconds)
-            .ThenBy(frame => frame.Id, StringComparer.Ordinal)
-            .First();
-        var keyframeSelectionChange = SetSelectedTransformKeyframe(next);
-        Playback.Seek(next.TimeSeconds);
-        UpdateEditAvailability();
-        RaiseTransformKeyframeSelectionChanged(keyframeSelectionChange);
         return SceneEditResult.Applied;
     }
 
@@ -287,8 +271,7 @@ public sealed class DocumentSession
             return false;
         }
 
-        MoveUndoToRedo(command);
-        RefreshSelectionAfterHistoryTransition();
+        MoveUndoToRedoAndReconcile(command);
         return true;
     }
 
@@ -306,8 +289,7 @@ public sealed class DocumentSession
             return false;
         }
 
-        MoveRedoToUndo(command);
-        RefreshSelectionAfterHistoryTransition();
+        MoveRedoToUndoAndReconcile(command);
         return true;
     }
 
@@ -373,7 +355,7 @@ public sealed class DocumentSession
             return result;
         }
 
-        CommitExecute(command);
+        CommitExecuteAndReconcile(command);
         return SceneEditResult.Applied;
     }
 
@@ -667,13 +649,6 @@ public sealed class DocumentSession
                 return candidate;
             }
         }
-    }
-
-    private void RefreshSelectionAfterHistoryTransition()
-    {
-        var keyframeSelectionChange = RefreshSelectedTransformKeyframeAtCurrentTime();
-        UpdateEditAvailability();
-        RaiseTransformKeyframeSelectionChanged(keyframeSelectionChange);
     }
 
     private void ReconcileSelectedTransformKeyframeAfterMutation()

@@ -69,4 +69,39 @@ public sealed class TransformTrackLayoutTests
         Assert.Throws<ArgumentOutOfRangeException>(() => TransformTrackLayout.HitTest([], 0, -1));
         Assert.Throws<ArgumentOutOfRangeException>(() => TransformTrackLayout.HitTest([], 0, double.NaN));
     }
+
+    [Fact]
+    public void CreateMarkerStates_distinguishes_selected_fill_from_current_time_outline_with_tolerance()
+    {
+        var markers = new TransformTrackMarker[]
+        {
+            new("selected", 1, 20),
+            new("current", 2, 40),
+            new("outside-tolerance", 2.000000002, 60),
+        };
+
+        var states = TransformTrackLayout.CreateMarkerStates(
+            markers,
+            selectedKeyframeId: "selected",
+            currentTimeSeconds: 2.0000000005,
+            timeToleranceSeconds: 0.000000001);
+
+        Assert.Collection(
+            states,
+            state =>
+            {
+                Assert.True(state.IsSelected);
+                Assert.False(state.IsAtCurrentTime);
+            },
+            state =>
+            {
+                Assert.False(state.IsSelected);
+                Assert.True(state.IsAtCurrentTime);
+            },
+            state =>
+            {
+                Assert.False(state.IsSelected);
+                Assert.False(state.IsAtCurrentTime);
+            });
+    }
 }

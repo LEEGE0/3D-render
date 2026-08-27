@@ -9,10 +9,12 @@ public partial class TransformTrackSurface : Control
 {
     private const double HorizontalPadding = 12;
     private const double HitRadius = 10;
+    private const double TimeMatchToleranceSeconds = 0.000000001;
     private const float MarkerHalfSize = 6;
     private readonly Color _trackColor = new("4f6178");
     private readonly Color _markerColor = new("7ea7d8");
     private readonly Color _selectedMarkerColor = new("ffd166");
+    private readonly Color _currentTimeOutlineColor = new("f5f7fa");
     private DocumentSession? _session;
 
     public void Attach(DocumentSession session)
@@ -63,10 +65,16 @@ public partial class TransformTrackSurface : Control
             _trackColor,
             2);
 
-        foreach (var marker in CreateMarkers(session))
+        var states = TransformTrackLayout.CreateMarkerStates(
+            CreateMarkers(session),
+            session.SelectedTransformKeyframeId,
+            session.Playback.CurrentTimeSeconds,
+            TimeMatchToleranceSeconds);
+        foreach (var state in states)
         {
+            var marker = state.Marker;
             var center = new Vector2((float)marker.X, centerY);
-            var color = marker.Id == session.SelectedTransformKeyframeId
+            var color = state.IsSelected
                 ? _selectedMarkerColor
                 : _markerColor;
             DrawColoredPolygon(
@@ -77,9 +85,9 @@ public partial class TransformTrackSurface : Control
                 center + new Vector2(-MarkerHalfSize, 0),
             ],
             color);
-            if (marker.Id == session.SelectedTransformKeyframeId)
+            if (state.IsAtCurrentTime)
             {
-                DrawArc(center, MarkerHalfSize + 3, 0, Mathf.Tau, 20, _selectedMarkerColor, 2);
+                DrawArc(center, MarkerHalfSize + 3, 0, Mathf.Tau, 20, _currentTimeOutlineColor, 2);
             }
         }
     }

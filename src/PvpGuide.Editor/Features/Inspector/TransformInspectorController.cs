@@ -57,7 +57,11 @@ public sealed class TransformInspectorController : IDisposable
         ConfigureInput(_zInput, -1000, 1000);
         ConfigureInput(_yInput, -100, 100);
         ConfigureInput(_yawInput, -360000, 360000);
-        ConfigureTimeInput(_timeInput, 0, _session.Playback.DurationSeconds);
+        ConfigureTimeInput(
+            _timeInput,
+            0,
+            _session.Playback.DurationSeconds,
+            _session.Playback.FramesPerSecond);
 
         foreach (var input in _inputs)
         {
@@ -117,10 +121,15 @@ public sealed class TransformInspectorController : IDisposable
         input.AllowLesser = true;
     }
 
-    private static void ConfigureTimeInput(SpinBox input, double minimum, double maximum)
+    private static void ConfigureTimeInput(
+        SpinBox input,
+        double minimum,
+        double maximum,
+        int framesPerSecond)
     {
         input.MinValue = minimum;
         input.MaxValue = maximum;
+        input.Step = 1d / framesPerSecond;
         input.AllowGreater = true;
         input.AllowLesser = true;
     }

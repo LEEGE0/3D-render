@@ -1,0 +1,14 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://Scenes/Main/Main.cs" id="1_main"]
+
+[node name="MissingRequiredChildProbe" type="Control"]
+script = ExtResource("1_main")
+
+[node name="TopViewPanel" type="Panel" parent="."]
+
+[node name="WorldViewPanel" type="Panel" parent="."]
+
+[node name="TimelinePanel" type="Panel" parent="."]
+
+[node name="InspectorPanel" type="Panel" parent="."]

@@ -46,6 +46,28 @@ function Invoke-GodotStep {
     }
 }
 
+function Invoke-GodotFailureProbe {
+    param(
+        [string]$Name,
+        [string[]]$Arguments,
+        [string]$RequiredOutput
+    )
+
+    $output = (& $GodotExecutable @Arguments 2>&1 | Out-String)
+    $exitCode = $LASTEXITCODE
+
+    if ($exitCode -eq 0) {
+        throw "$Name 단계가 실패 종료 코드를 반환하지 않았습니다.`n$output"
+    }
+
+    if ($output -notmatch [regex]::Escape($RequiredOutput)) {
+        throw "$Name 단계 출력에 필수 실패 표식 '$RequiredOutput'이 없습니다.`n$output"
+    }
+
+    Write-Output "--- $Name ---"
+    Write-Output 'HEADLESS_STARTUP_FAILURE_PROBE=PASS'
+}
+
 Invoke-GodotStep -Name '리소스 가져오기' -Arguments @(
     '--headless',
     '--path', $projectRoot,
@@ -58,6 +80,18 @@ Invoke-GodotStep -Name 'Godot 솔루션 빌드' -Arguments @(
     '--build-solutions',
     '--quit'
 )
+
+Invoke-GodotFailureProbe -Name '필수 패널 누락 실패 검사' -Arguments @(
+    '--headless',
+    '--path', $projectRoot,
+    '--scene', 'res://Scenes/Main/MissingRequiredPanelProbe.tscn'
+) -RequiredOutput 'GODOT_RUNTIME_VERIFICATION_FAILED phase=startup-required-panels'
+
+Invoke-GodotFailureProbe -Name '필수 자식 누락 실패 검사' -Arguments @(
+    '--headless',
+    '--path', $projectRoot,
+    '--scene', 'res://Scenes/Main/MissingRequiredChildProbe.tscn'
+) -RequiredOutput 'GODOT_RUNTIME_VERIFICATION_FAILED phase=startup-required-children'
 
 Invoke-GodotStep -Name '메인 장면 실행' -Arguments @(
     '--headless',
