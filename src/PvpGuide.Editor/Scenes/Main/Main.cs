@@ -1,4 +1,5 @@
 using Godot;
+using PvpGuide.Application.Editing;
 using PvpGuide.Application.Playback;
 using PvpGuide.Application.Projection;
 using PvpGuide.Application.Sessions;
@@ -81,7 +82,10 @@ public partial class Main : Control
             "runtime-actor",
             "Runtime Actor",
             "교육용 배우",
-            [new TransformKeyframe("runtime-origin", 0, new Position3(0, 0, 0), 0)],
+            [
+                new TransformKeyframe("runtime-origin", 0, new Position3(0, 0, 0), 0),
+                new TransformKeyframe("runtime-end", 1, new Position3(5, 2, -4), 90),
+            ],
             [],
             []));
 
@@ -141,6 +145,26 @@ public partial class Main : Control
                 $"BASIC_EDITING_READY revision={document.Revision} selected={session.SelectedActorId} " +
                 "moved=1 undo=1 redo=1 " +
                 $"top={topViewSurface.ApplyCount} world={worldAdapter.ApplyCount} actors={worldAdapter.ActorCount}");
+
+            RunTimelinePlaybackIntegration(
+                document,
+                session,
+                topViewSurface,
+                worldAdapter,
+                actorsRoot,
+                xInput,
+                yInput,
+                zInput,
+                yawInput,
+                applyButton,
+                undoButton,
+                redoButton,
+                errorLabel,
+                playPauseButton,
+                stopButton,
+                timeSlider,
+                currentTimeLabel,
+                timelineStatus);
         }
         catch
         {
@@ -346,6 +370,244 @@ public partial class Main : Control
             "rotation_commit=1 enter_commit=1 removal_ownership=1");
     }
 
+    private void RunTimelinePlaybackIntegration(
+        SceneDocument document,
+        DocumentSession session,
+        TopViewSurface topViewSurface,
+        WorldViewProjectionAdapter worldAdapter,
+        Node3D actorsRoot,
+        SpinBox xInput,
+        SpinBox yInput,
+        SpinBox zInput,
+        SpinBox yawInput,
+        Button applyButton,
+        Button undoButton,
+        Button redoButton,
+        Label errorLabel,
+        Button playPauseButton,
+        Button stopButton,
+        HSlider timeSlider,
+        Label currentTimeLabel,
+        Label timelineStatus)
+    {
+        const double midpointSeconds = 0.5;
+        var actorRoot = actorsRoot.GetNodeOrNull<Node3D>("Actor_runtime_actor")
+            ?? throw new InvalidOperationException("타임라인 통합 검증 실패: runtime actor root가 없습니다.");
+        var actorBefore = document.Actors.Single(actor => actor.ActorId == "runtime-actor");
+        var firstKeyframeBefore = document.GetTransformKeyframe("runtime-actor", "runtime-origin");
+        var endKeyframeBefore = document.GetTransformKeyframe("runtime-actor", "runtime-end");
+        var revisionBefore = document.Revision;
+        var topApplyCountBefore = topViewSurface.ApplyCount;
+        var worldApplyCountBefore = worldAdapter.ApplyCount;
+        var historyEvents = 0;
+        var previewUpdates = 0;
+        var previewClears = 0;
+        EventHandler historyHandler = (_, _) => historyEvents++;
+        EventHandler<TransformPreviewChangedEventArgs> previewHandler = (_, eventArgs) =>
+        {
+            if (eventArgs.Preview is null)
+            {
+                previewClears++;
+            }
+            else
+            {
+                previewUpdates++;
+            }
+        };
+        session.HistoryChanged += historyHandler;
+        session.PreviewChanged += previewHandler;
+
+        try
+        {
+            Require(revisionBefore == 4 && topApplyCountBefore == 4 && worldApplyCountBefore == 4,
+                "기본 편집 검사가 revision/top/world 4에서 끝나지 않았습니다.");
+            Require(actorBefore.TransformKeyframes.Count == 2 &&
+                    firstKeyframeBefore.Position == new Position3(1, 0, 0) &&
+                    IsNear(firstKeyframeBefore.YawDegrees, 0) &&
+                    endKeyframeBefore.Position == new Position3(5, 2, -4) &&
+                    IsNear(endKeyframeBefore.YawDegrees, 90),
+                "결정적 타임라인의 두 committed 키프레임이 준비되지 않았습니다.");
+
+            xInput.Value = 2;
+            Require(previewUpdates > 0 && IsPosition(actorRoot.Position, 2, 0, 0),
+                "slider seek 전에 실제 Inspector ValueChanged preview가 표시되지 않았습니다.");
+            Require(document.Revision == revisionBefore && historyEvents == 0,
+                "Inspector preview가 revision 또는 history를 변경했습니다.");
+
+            timeSlider.Value = midpointSeconds;
+            Require(IsNear(session.Playback.CurrentTimeSeconds, midpointSeconds) && !session.Playback.IsPlaying,
+                "HSlider ValueChanged가 0.5초 seek와 pause를 적용하지 않았습니다.");
+            Require(previewClears == 1,
+                "HSlider seek가 활성 preview를 정확히 한 번 취소하지 않았습니다.");
+            Require(IsPosition(actorRoot.Position, 3, 1, -2) && IsNear(actorRoot.Rotation.Y, -Math.PI / 4),
+                "preview 취소 뒤 hand-derived 0.5초 committed midpoint가 3D에 복원되지 않았습니다.");
+            Require(topViewSurface.ApplyCount == topApplyCountBefore + 1 &&
+                    worldAdapter.ApplyCount == worldApplyCountBefore + 1,
+                "0.5초 seek가 TopView와 WorldView에 같은 projection 전이를 만들지 않았습니다.");
+            Require(IsNear(timeSlider.Value, midpointSeconds) && currentTimeLabel.Text.Contains("0.500초", StringComparison.Ordinal),
+                "0.5초 seek가 timeline 표시를 갱신하지 않았습니다.");
+
+            session.SelectActor(null);
+            var mapper = new TopViewCoordinateMapper(
+                Math.Max(topViewSurface.Size.X, 1),
+                Math.Max(topViewSurface.Size.Y, 1),
+                centerX: 0,
+                centerZ: 0,
+                pixelsPerUnit: 40);
+            var midpointCenter = mapper.WorldToScreen(new Position3(3, 1, -2));
+            SendLeftButton(topViewSurface, midpointCenter, pressed: true);
+            SendLeftButton(topViewSurface, midpointCenter, pressed: false);
+            Require(session.SelectedActorId == "runtime-actor",
+                "TopView가 hand-derived midpoint 위치에서 runtime actor를 찾지 못했습니다.");
+            VerifyMidpointTopViewYaw(topViewSurface, document.CreateSnapshot(midpointSeconds));
+
+            Require(!session.CanEditSelectedTransform &&
+                    session.EditLockReason?.Contains("최초 키프레임 시각", StringComparison.Ordinal) == true,
+                "0.5초 read-only 편집 잠금이 활성화되지 않았습니다.");
+            Require(!xInput.Editable && !yInput.Editable && !zInput.Editable && !yawInput.Editable &&
+                    applyButton.Disabled && undoButton.Disabled && redoButton.Disabled &&
+                    timelineStatus.Text.Contains("최초 키프레임 시각", StringComparison.Ordinal),
+                "Inspector/history/timeline UI가 0.5초 편집 잠금을 표시하지 않았습니다.");
+
+            var guardedPointer = new ScreenPoint(midpointCenter.X + 40, midpointCenter.Y);
+            SendLeftButton(topViewSurface, midpointCenter, pressed: true);
+            SendLeftMotion(topViewSurface, guardedPointer, leftButtonPressed: true);
+            SendLeftButton(topViewSurface, guardedPointer, pressed: false);
+            xInput.Value = 9;
+            applyButton.EmitSignal(Button.SignalName.Pressed);
+            Require(IsNear(xInput.Value, 1) &&
+                    errorLabel.Text.Contains("최초 키프레임 시각", StringComparison.Ordinal) &&
+                    IsPosition(actorRoot.Position, 3, 1, -2) && IsNear(actorRoot.Rotation.Y, -Math.PI / 4),
+                "중간 시각 TopView 또는 Inspector edit guard가 committed midpoint를 보존하지 못했습니다.");
+
+            playPauseButton.EmitSignal(Button.SignalName.Pressed);
+            Require(session.Playback.IsPlaying && playPauseButton.Text == "일시정지" &&
+                    session.EditLockReason?.Contains("재생 중", StringComparison.Ordinal) == true,
+                "PlayPauseButton.Pressed가 재생 상태와 편집 잠금을 갱신하지 않았습니다.");
+
+            _UnhandledKeyInput(new InputEventKey { Keycode = Key.Space, Pressed = true, Echo = false });
+            Require(!session.Playback.IsPlaying && playPauseButton.Text == "재생" &&
+                    IsNear(session.Playback.CurrentTimeSeconds, midpointSeconds),
+                "Main Space input이 같은 toggle 경로로 재생을 일시정지하지 않았습니다.");
+            _UnhandledKeyInput(new InputEventKey { Keycode = Key.Space, Pressed = true, Echo = false });
+            Require(session.Playback.IsPlaying && playPauseButton.Text == "일시정지" &&
+                    IsNear(session.Playback.CurrentTimeSeconds, midpointSeconds),
+                "Main Space input이 같은 toggle 경로로 재생을 재개하지 않았습니다.");
+            Require(topViewSurface.ApplyCount == topApplyCountBefore + 1 &&
+                    worldAdapter.ApplyCount == worldApplyCountBefore + 1,
+                "같은 시각의 play/pause 전이가 (revision,time) projection을 중복 적용했습니다.");
+
+            session.Playback.Advance(10);
+            Require(IsNear(session.Playback.CurrentTimeSeconds, 1) && !session.Playback.IsPlaying,
+                "결정적 Advance가 duration에 clamp한 뒤 자동 pause하지 않았습니다.");
+            Require(IsPosition(actorRoot.Position, 5, 2, -4) && IsNear(actorRoot.Rotation.Y, -Math.PI / 2) &&
+                    topViewSurface.ApplyCount == topApplyCountBefore + 2 &&
+                    worldAdapter.ApplyCount == worldApplyCountBefore + 2,
+                "end clamp snapshot이 두 view에 마지막 committed 변환으로 동기화되지 않았습니다.");
+
+            stopButton.EmitSignal(Button.SignalName.Pressed);
+            Require(IsNear(session.Playback.CurrentTimeSeconds, 0) && !session.Playback.IsPlaying &&
+                    IsNear(timeSlider.Value, 0) && playPauseButton.Text == "재생",
+                "StopButton.Pressed가 0초 paused 상태를 복원하지 않았습니다.");
+            Require(session.CanEditSelectedTransform && session.EditLockReason is null &&
+                    xInput.Editable && yInput.Editable && zInput.Editable && yawInput.Editable &&
+                    !applyButton.Disabled && !undoButton.Disabled && redoButton.Disabled &&
+                    timelineStatus.Text.Contains("편집 가능", StringComparison.Ordinal) &&
+                    string.IsNullOrWhiteSpace(errorLabel.Text),
+                "Stop 뒤 최초 키프레임 편집 상태가 복원되지 않았습니다.");
+            Require(IsPosition(actorRoot.Position, 1, 0, 0) && IsNear(actorRoot.Rotation.Y, 0) &&
+                    IsNear(xInput.Value, 1) && IsNear(yInput.Value, 0) &&
+                    IsNear(zInput.Value, 0) && IsNear(yawInput.Value, 0) &&
+                    topViewSurface.ApplyCount == topApplyCountBefore + 3 &&
+                    worldAdapter.ApplyCount == worldApplyCountBefore + 3,
+                "Stop 뒤 두 view와 Inspector가 edited t=0 committed 변환을 복원하지 않았습니다.");
+
+            var actorAfter = document.Actors.Single(actor => actor.ActorId == "runtime-actor");
+            Require(document.Revision == revisionBefore && ReferenceEquals(actorBefore, actorAfter) &&
+                    ReferenceEquals(firstKeyframeBefore, document.GetTransformKeyframe("runtime-actor", "runtime-origin")) &&
+                    ReferenceEquals(endKeyframeBefore, document.GetTransformKeyframe("runtime-actor", "runtime-end")),
+                "timeline 조작이 revision 또는 committed keyframe identity를 변경했습니다.");
+            Require(historyEvents == 0 && session.CanUndo && !session.CanRedo &&
+                    !undoButton.Disabled && redoButton.Disabled,
+                "timeline 조작이 Undo/Redo history를 변경했습니다.");
+
+            GD.Print(
+                "TIMELINE_PLAYBACK_READY scrub_midpoint=1 top_world_sync=1 revision_unchanged=1 " +
+                "history_unchanged=1 preview_cancel=1 edit_guard=1 play_button=1 space_toggle=1 " +
+                "end_clamp=1 stop_restore=1");
+        }
+        finally
+        {
+            session.HistoryChanged -= historyHandler;
+            session.PreviewChanged -= previewHandler;
+        }
+    }
+
+    private static void VerifyMidpointTopViewYaw(Control temporaryParent, SceneSnapshot midpointSnapshot)
+    {
+        const double surfaceWidth = 640;
+        const double surfaceHeight = 360;
+        const double pixelsPerUnit = 40;
+        const double midpointHandleDiagonalOffset = 19.79898987322333; // 28 * cos/sin(45°)
+        var midpointTransform = midpointSnapshot.ActorTransforms["runtime-actor"];
+        Require(IsNear(midpointSnapshot.TimeSeconds, 0.5) &&
+                midpointTransform.Position == new Position3(3, 1, -2) &&
+                IsNear(midpointTransform.YawDegrees, 45),
+            "TopView yaw probe에 hand-derived midpoint snapshot이 전달되지 않았습니다.");
+
+        var document = CreateTemporaryDocument(
+            "midpoint-yaw-runtime",
+            "runtime-actor",
+            new Position3(3, 1, -2),
+            45);
+        var session = new DocumentSession(document);
+        session.SelectActor("runtime-actor");
+        var surface = new TopViewSurface
+        {
+            Name = "MidpointYawSurface",
+            Visible = false,
+            Size = new Vector2((float)surfaceWidth, (float)surfaceHeight),
+        };
+        temporaryParent.AddChild(surface);
+        TransformPreview? observedPreview = null;
+        EventHandler<TransformPreviewChangedEventArgs> previewHandler = (_, eventArgs) =>
+        {
+            if (eventArgs.Preview is not null)
+            {
+                observedPreview = eventArgs.Preview;
+            }
+        };
+        session.PreviewChanged += previewHandler;
+        try
+        {
+            surface.Initialize(session);
+            surface.Apply(midpointSnapshot);
+            var midpointCenter = new ScreenPoint(
+                (surfaceWidth / 2) + (3 * pixelsPerUnit),
+                (surfaceHeight / 2) + (-2 * pixelsPerUnit));
+            var expectedMidpointHandle = new ScreenPoint(
+                midpointCenter.X + midpointHandleDiagonalOffset,
+                midpointCenter.Y + midpointHandleDiagonalOffset);
+
+            SendLeftButton(surface, expectedMidpointHandle, pressed: true);
+            SendLeftMotion(
+                surface,
+                new ScreenPoint(midpointCenter.X, midpointCenter.Y + 28),
+                leftButtonPressed: true);
+
+            Require(observedPreview is not null &&
+                    observedPreview.Position == new Position3(3, 1, -2) &&
+                    IsNear(observedPreview.YawDegrees, 90),
+                "TopView가 hand-derived 45도 midpoint 방향 핸들을 실제 입력으로 찾지 못했습니다.");
+        }
+        finally
+        {
+            session.PreviewChanged -= previewHandler;
+            surface.DetachSession();
+            surface.QueueFree();
+        }
+    }
+
     private static void RequirePreviewInactive(DocumentSession session)
     {
         var beganProbe = false;
@@ -518,7 +780,11 @@ public partial class Main : Control
         }
     }
 
-    private static SceneDocument CreateTemporaryDocument(string documentId, string actorId) =>
+    private static SceneDocument CreateTemporaryDocument(
+        string documentId,
+        string actorId,
+        Position3? position = null,
+        double yawDegrees = 0) =>
         SceneDocument.Create(
             documentId,
             documentId,
@@ -530,7 +796,7 @@ public partial class Main : Control
                     actorId,
                     actorId,
                     "교육용 배우",
-                    [new TransformKeyframe($"{actorId}-origin", 0, new Position3(0, 0, 0), 0)],
+                    [new TransformKeyframe($"{actorId}-origin", 0, position ?? new Position3(0, 0, 0), yawDegrees)],
                     [],
                     []),
             ]);

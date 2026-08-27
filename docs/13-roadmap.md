@@ -57,7 +57,7 @@ Windows 11에서 오프라인으로 메인 창이 열리고 헤드리스 검증�
 - 3D 직접 피킹과 축 기즈모
 - 키보드 단축키와 패널 상태 저장
 
-시간 스크럽, 임의 시점 키프레임 생성·이동·삭제는 단계 3에서 구현한다. 현재 편집은 원본 시간 구조를 조용히 바꾸지 않도록 각 배우의 시간상 최초 변환 키프레임만 대상으로 한다.
+읽기 전용 시간 스크럽·재생은 단계 3A에서 완료했다. 현재 영구 편집은 원본 시간 구조를 조용히 바꾸지 않도록 각 배우의 시간상 최초 변환 키프레임만 대상으로 하며, 임의 시점 키프레임 생성·수정·삭제는 다음 구현 단위다.
 
 ### 완료 기준
 
@@ -65,18 +65,41 @@ Windows 11에서 오프라인으로 메인 창이 열리고 헤드리스 검증�
 
 ## 단계 3 — 타임라인과 락온
 
-### 작업
+### 완료된 단계 3A — 읽기 전용 시간 탐색과 재생
 
-- 시간 스크럽과 재생
-- 변환·행동·락온 트랙
-- 키프레임 생성·이동·삭제
+- [x] 문서 duration/FPS를 사용하는 Godot 독립 `PlaybackClock`과 seek/play/pause/toggle/stop/end clamp
+- [x] `DocumentSession`의 playback 소유권, 시간·재생 상태 기반 편집 잠금과 시간 변경 시 active preview 취소
+- [x] `(revision,time)` key로 동일 snapshot을 TopView/WorldView에 한 번씩 전달하고 같은 시각 play/pause 중복 투영 방지
+- [x] `TimeSlider.ValueChanged`, Play/Pause·Stop button signal, 현재 시간·프레임·잠금 상태 표시
+- [x] Main `Space` 입력과 Play/Pause button이 사용하는 동일 toggle 경로
+- [x] 중간 시각 read-only TopView/Inspector guard와 Stop 뒤 최초 시각 편집 상태 복원
+- [x] wait나 `_Process` 횟수 없이 hand-derived midpoint, preview cancellation, 문서/history 불변과 end auto-pause를 검증하는 exact runtime marker
+
+3A는 기존 transform keyframe을 평가하는 read-only playback foundation이다. track/keyframe 편집 UI, 행동·락온 track, 이동 궤적, 실제 DSR animation playback, render 실행과 gamepad 조작까지 완료했다는 의미가 아니다.
+
+### 다음 구현 단위 — 임의 시점 변환 키프레임 CRUD
+
+- 선택 actor와 현재 paused time을 기준으로 transform keyframe 생성
+- keyframe ID/time/position/yaw 조회와 선택 상태
+- 선택 keyframe의 transform/time 수정 및 충돌 검증
+- keyframe 삭제와 최소 한 개 transform 유지 정책
+- 생성·수정·삭제 각각의 원자적 command, Undo/Redo와 revision/event 계약
+- 같은 시각 중복, 문서 범위 밖 시간, 재생 중 편집과 stale preimage 거부
+- track marker/Inspector/두 view의 선택·평가 동기화와 결정적 런타임 검증
+
+이 CRUD가 들어오기 전에는 slider가 가리키는 임의 시각에서 Inspector 값을 확정하거나 키프레임을 자동 생성하지 않는다.
+
+### 단계 3 후속 작업
+
+- 행동·락온 트랙과 구간 편집
 - 최단 회전과 단계 상태 평가
 - 락온 대상과 연속 방향 계산
 - 이동 궤적
+- 타임라인 확대·스크롤·프레임/키프레임/구간 스냅
 
 ### 완료 기준
 
-네 캐릭터 장면을 60FPS 목표로 재생하고, 락온 이동과 자유 방향 이동이 예상대로 다르게 동작한다.
+단계 3 전체 완료 기준은 네 캐릭터 장면을 60FPS 목표로 재생하고, transform CRUD를 Undo/Redo할 수 있으며, 락온 이동과 자유 방향 이동이 예상대로 다르게 동작하는 것이다. 현재 3A는 이 기준 중 읽기 전용 시간 평가와 재생 기반만 완료했다.
 
 ## 단계 4 — 가이드 가져오기와 저장
 

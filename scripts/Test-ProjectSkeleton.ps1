@@ -13,7 +13,15 @@ $applicationTestRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Application.Tes
 $infrastructureTestRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Infrastructure.Tests'
 $editorTestRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Editor.Tests'
 $sampleRoot = Join-Path $RepositoryRoot 'samples\guides'
+$readmeFile = Join-Path $RepositoryRoot 'README.md'
+$editorArchitectureFile = Join-Path $RepositoryRoot 'docs\05-editor-architecture.md'
+$roadmapFile = Join-Path $RepositoryRoot 'docs\13-roadmap.md'
+$runtimeTestScript = Join-Path $RepositoryRoot 'scripts\Test-GodotRuntime.ps1'
 $requiredFiles = @(
+    $readmeFile,
+    $editorArchitectureFile,
+    $roadmapFile,
+    $runtimeTestScript,
     (Join-Path $projectRoot 'project.godot'),
     (Join-Path $projectRoot 'PvpGuide.Editor.csproj'),
     (Join-Path $projectRoot 'PvpGuide.Editor.sln'),

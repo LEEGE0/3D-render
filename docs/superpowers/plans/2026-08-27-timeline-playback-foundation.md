@@ -244,11 +244,11 @@
 
 **Produces:** exact `TIMELINE_PLAYBACK_READY` evidence, current Korean operation/architecture/roadmap documentation
 
-- [ ] **Step 1: runtime 문서를 두 키프레임으로 확장한다**
+- [x] **Step 1: runtime 문서를 두 키프레임으로 확장한다**
 
   기존 basic editing smoke가 먼저 완료되게 순서를 보존한다. runtime actor에 t=1 변환 키프레임을 추가하되 기존 최초 키프레임 편집 결과와 `BASIC_EDITING_*` exact marker를 유지한다.
 
-- [ ] **Step 2: 실제 UI signal과 결정적 clock 호출을 검증한다**
+- [x] **Step 2: 실제 UI signal과 결정적 clock 호출을 검증한다**
 
   runtime self-test는 실제 대기나 `_Process` 횟수에 의존하지 않고 다음을 직접 검증한다.
 
@@ -266,13 +266,13 @@
   TIMELINE_PLAYBACK_READY scrub_midpoint=1 top_world_sync=1 revision_unchanged=1 history_unchanged=1 preview_cancel=1 edit_guard=1 play_button=1 space_toggle=1 end_clamp=1 stop_restore=1
   ```
 
-- [ ] **Step 3: 검증 스크립트와 한글 문서를 갱신한다**
+- [x] **Step 3: 검증 스크립트와 한글 문서를 갱신한다**
 
   `Test-ProjectSkeleton.ps1`은 새 Application/Editor 파일과 scene node, README/architecture/roadmap의 핵심 계약을 검사한다. `Test-GodotRuntime.ps1`은 기존 exact marker에 새 exact marker를 추가한다.
 
   README에는 slider·Play/Pause·Stop·Space 사용법과 읽기 전용 시점 잠금을 기록한다. editor architecture에는 playback 상태 소유권, preview cancellation, `(revision,time)` projection을 기록한다. roadmap은 단계 3A를 완료로 표시하고 다음 단위를 임의 시점 변환 키프레임 CRUD로 명확히 한다.
 
-- [ ] **Step 4: 모든 자동 검증을 메인에서 새로 직렬 실행한다**
+- [x] **Step 4: 모든 자동 검증을 메인에서 새로 직렬 실행한다**
 
   ```powershell
   $projects = @(
@@ -291,7 +291,7 @@
 
   Expected: 기존 133개와 모든 새 테스트 실패 0, 구조 PASS, 기존 marker와 `TIMELINE_PLAYBACK_READY`, `GODOT_RUNTIME_VERIFICATION=PASS`.
 
-- [ ] **Step 5: Forward+ GUI와 시각 상태를 확인한다**
+- [x] **Step 5: Forward+ GUI와 시각 상태를 확인한다**
 
   현재 사용자가 실행해 둔 Godot 인스턴스를 조작하지 않는다. 검증용 별도 프로세스를 Godot console executable로 실행해 Vulkan Forward+, marker, ERROR 부재를 확인하고, 새 타임라인 control·두 뷰·Inspector가 1280×720에서 겹치거나 잘리지 않는지 별도 화면 캡처로 확인한다.
 

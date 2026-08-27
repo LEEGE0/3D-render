@@ -2,7 +2,7 @@
 
 Windows 11에서 오프라인으로 실행되는 DARK SOULS REMASTERED PvP 상황 재현·교육 영상 제작 프로그램이다. 일반적인 3D 제작 도구보다 전투 참여자의 위치, 방향, 거리, 타이밍, 락온, 공격과 뒤잡 관계를 빠르고 정확하게 설명하는 데 초점을 둔다.
 
-현재 저장소에는 실행 가능한 Godot 프로젝트 골격, `SceneDocument` 기반 동시 뷰 동기화, 탑뷰 기본 편집, 3D 플레이스홀더, 숫자 Inspector, Undo/Redo, 버전형 저장·가이드 가져오기·렌더 큐 기반이 구현되어 있다. 실제 게임 자산 연결, 타임라인과 최종 렌더 파이프라인은 후속 마일스톤에서 다룬다.
+현재 저장소에는 실행 가능한 Godot 프로젝트 골격, `SceneDocument` 기반 동시 뷰 동기화, 탑뷰 기본 편집, 3D 플레이스홀더, 숫자 Inspector, Undo/Redo, 읽기 전용 시간 스크럽·재생, 버전형 저장·가이드 가져오기·렌더 큐 기반이 구현되어 있다. 임의 시점 키프레임 편집, 실제 게임 애니메이션 연결과 최종 렌더 실행은 후속 마일스톤에서 다룬다.
 
 ## 핵심 목표
 
@@ -44,9 +44,9 @@ Godot을 선택한 이유는 오프라인 배포가 단순하고, 2D UI·3D 장�
 
 `SceneDocument`가 유일한 원본 상태다. 탑뷰와 3D 뷰는 서로의 상태를 직접 복사하지 않고 문서를 읽어 그린다. 이동, 회전, 키프레임 추가, 락온 변경은 모두 명령으로 수행해 Undo/Redo와 저장 상태 추적을 일관되게 유지한다.
 
-## 현재 사용할 수 있는 기본 편집
+## 현재 사용할 수 있는 기본 편집과 읽기 전용 타임라인
 
-Godot 메인 장면을 실행하면 왼쪽 위 탑뷰, 오른쪽 위 3D 뷰, 아래쪽 타임라인 자리와 Inspector가 동시에 열린다. 현재 기본 편집 흐름은 다음과 같다.
+Godot 메인 장면을 실행하면 왼쪽 위 탑뷰, 오른쪽 위 3D 뷰, 아래쪽 타임라인과 Inspector가 동시에 열린다. 현재 기본 편집 흐름은 다음과 같다.
 
 - 탑뷰의 배우 몸체를 클릭하면 배우를 선택한다. 각 표식은 Application의 불변 `ActorDisplayInfo`에서 받은 표시 이름과 `역할: ...` 텍스트를 함께 보여주며, 적대 역할은 마름모 몸체로 구분한다. 빈 공간을 클릭하면 선택을 해제한다.
 - 선택한 배우 몸체를 3px 이상 끌면 X/Z 위치 미리보기가 시작된다. 이동 중 Y와 Yaw는 보존된다.
@@ -58,9 +58,17 @@ Godot 메인 장면을 실행하면 왼쪽 위 탑뷰, 오른쪽 위 3D 뷰, 아
 - X/Z ±1000, Y ±100 범위 밖 숫자는 입력칸에서 먼저 받아 오류를 설명하지만 preview나 문서 변경을 시작하지 않는다. 이미 유효한 숫자로 preview 중이었다면 범위 오류 순간 두 뷰를 committed 상태로 복원하되 잘못 입력한 값과 ErrorLabel은 보존한다. 범위를 바로 clamp해 잘못된 입력을 정상값처럼 확정하지 않는다.
 - 3D 뷰는 actor ID별 기본 Capsule/Box 플레이스홀더를 재사용하고 로컬 +X 방향 표식을 표시한다. 실제 게임 모델이나 애니메이션이 없어도 편집 흐름을 확인할 수 있다.
 
-타임라인이 아직 없으므로 편집 대상은 배우의 시간상 가장 이른 변환 키프레임(`TransformKeyframes[0]`)이다. 가져온 장면의 최초 키프레임 시간이 0초가 아니어도 임의의 0초 키프레임을 만들지 않는다. 키프레임 추가·삭제·임의 시점 편집은 다음 타임라인 마일스톤에서 구현한다.
+읽기 전용 타임라인 3A의 사용법과 경계는 다음과 같다.
 
-### 기본 편집 실행과 검증
+- 시간 slider를 끌거나 클릭하면 재생을 일시정지하고 해당 시각을 즉시 평가한다. 활성 변환 preview가 있었다면 먼저 취소하고, 같은 committed 문서를 그 시각에서 다시 평가해 탑뷰와 3D 뷰에 함께 표시한다.
+- `재생`/`일시정지` 버튼과 `Space`는 같은 playback toggle을 사용한다. 문서 끝에 도달하면 끝 시각에 고정되고 자동으로 일시정지한다. 끝에서 다시 재생하면 0초부터 시작한다.
+- `처음으로` 버튼은 0초의 일시정지 상태로 돌아간다. 현재 시간과 프레임 표시는 slider와 재생 상태를 따라 갱신된다.
+- 재생 중이거나 재생 헤드가 선택 배우의 최초 변환 키프레임 시각과 다르면 변환 편집은 잠긴다. 이때 탑뷰 drag, Inspector 입력·Apply, Undo/Redo 버튼은 문서 revision이나 history를 바꾸지 않는다. 잠금 이유는 타임라인 상태와 Inspector 오류 영역에 표시된다.
+- 현재 영구 편집 대상은 여전히 배우의 시간상 가장 이른 변환 키프레임(`TransformKeyframes[0]`) 하나다. 가져온 장면의 최초 키프레임 시간이 0초가 아니어도 임의의 0초 키프레임을 만들지 않는다.
+
+이 단계는 기존 변환 키프레임을 임의 시각에서 평가하는 기능까지다. 키프레임 생성·이동·삭제, 임의 시점 변환 확정, 행동·락온 트랙 편집, 실제 DSR 애니메이션 재생, 영상 렌더 실행과 게임패드 조작은 아직 제공하지 않는다. 다음 구현 단위는 임의 시점 변환 키프레임 CRUD다.
+
+### 기본 편집과 타임라인 실행·검증
 
 저장소 루트에서 메인 장면을 실행한다.
 
@@ -90,6 +98,12 @@ BASIC_EDITING_READY revision=4 selected=runtime-actor moved=1 undo=1 redo=1 top=
 
 ```text
 BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 stale_error_clear=1 inspector_apply_noop=1 collision_nodes=1 final_ui_clean=1 rotation_commit=1 enter_commit=1 removal_ownership=1
+```
+
+두 기본 편집 표식 뒤에는 실제 `HSlider.ValueChanged`, Play/Pause·Stop 버튼 signal, Main의 `Space` 입력 경로와 결정적 `PlaybackClock.Advance()`를 실행한 다음 표식이 정확히 있어야 한다. 이 검사는 t=0 `(1,0,0), 0°`와 t=1 `(5,2,-4), 90°` 사이의 hand-derived 0.5초 값 `(3,1,-2), 45°`, preview 취소, 두 뷰 동기화, read-only 잠금, revision/history/keyframe 불변, 끝 clamp·자동 pause와 0초 복귀를 함께 증명한다.
+
+```text
+TIMELINE_PLAYBACK_READY scrub_midpoint=1 top_world_sync=1 revision_unchanged=1 history_unchanged=1 preview_cancel=1 edit_guard=1 play_button=1 space_toggle=1 end_clamp=1 stop_restore=1
 ```
 
 ## 기준 좌표와 뒤잡 규칙
@@ -150,7 +164,7 @@ dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug 
 & .\scripts\Test-GodotRuntime.ps1
 ```
 
-`Test-ProjectSkeleton.ps1`은 `.sln`, `project.godot`, 메인 장면·스크립트, Domain 프로젝트·소스, 테스트 프로젝트·소스의 존재와 C#·Forward Plus·`Godot.NET.Sdk/4.7.2`·`net8.0` 설정 및 네 패널을 검사한다. `Test-GodotRuntime.ps1`은 위의 D 드라이브 Godot 콘솔을 사용해 .NET 빌드, 리소스 import, Godot 솔루션 빌드, 메인 장면 실행을 차례로 수행한다. 모든 명령은 종료 코드 0이어야 하며, xUnit 테스트 실패는 0개, 장면 출력에는 `PROJECT_RUNTIME_READY`, 최종 출력에는 `GODOT_RUNTIME_VERIFICATION=PASS`가 있어야 한다.
+`Test-ProjectSkeleton.ps1`은 `.sln`, `project.godot`, 메인 장면·스크립트, Domain/Application/Editor의 playback·timeline 파일, 테스트 소스의 존재와 C#·Forward Plus·`Godot.NET.Sdk/4.7.2`·`net8.0` 설정, 네 패널과 timeline control, 사용자·아키텍처·roadmap 문서 계약을 검사한다. `Test-GodotRuntime.ps1`은 위의 D 드라이브 Godot 콘솔을 사용해 .NET 빌드, 리소스 import, Godot 솔루션 빌드, 메인 장면 실행을 차례로 수행한다. 모든 명령은 종료 코드 0이어야 하며, xUnit 테스트 실패는 0개, 장면 출력에는 기존 exact marker와 `TIMELINE_PLAYBACK_READY ...`, 최종 출력에는 `GODOT_RUNTIME_VERIFICATION=PASS`가 있어야 한다.
 
 ### Task 4 SceneDocument와 동시 뷰 투영 개발·검증
 
@@ -165,6 +179,8 @@ Task 4의 Domain은 Godot 타입에 의존하지 않는 `SceneDocument`를 단�
 - `CreateSnapshot(timeSeconds)`는 문서 ID, revision, 평가 시간과 배우별 평가 변환을 불변·방어 복사 형태의 `SceneSnapshot`으로 반환한다.
 - `ISceneProjectionConsumer.Apply(SceneSnapshot)`은 Godot 타입이 없는 포트다. `SceneProjectionController`는 하나의 snapshot source와 서로 다른 top/world consumer를 주입받고, 문서 변경 event 1회당 snapshot을 한 번만 만들어 동일 인스턴스를 두 소비자에게 각각 한 번 전달한다. 같은 revision 이벤트는 중복 전달하지 않으며 Dispose 이후에는 전달하지 않는다.
 - Main 장면은 `TopViewSurface`와 `WorldViewProjectionAdapter`를 실제 소비자로 조립한다. 초기 투영 뒤 `PROJECTION_SYNC_READY revision=1 top=1 world=1`, Move→Undo→Redo 뒤 `BASIC_EDITING_READY revision=4 selected=runtime-actor moved=1 undo=1 redo=1 top=4 world=4 actors=1`을 출력한다.
+- `DocumentSession`이 소유한 `PlaybackClock`은 현재 시각과 재생 여부를 관리하고, `SceneProjectionController`는 `(revision, time)` 조합이 바뀔 때만 두 소비자에 같은 평가 snapshot을 적용한다. 시간 변경은 revision이나 Undo/Redo history가 아니다.
+- `TimelineController`는 slider, Play/Pause·Stop 버튼과 표시 label을 playback에 연결하며 Main의 `Space` 입력도 같은 toggle API를 호출한다. 현재는 읽기 전용 3A이며 임의 시점 키프레임 CRUD는 제공하지 않는다.
 - committed/preview 투영 조정자, Inspector와 탑뷰 선택 event 구독은 `_ExitTree`에서 모두 해제한다.
 
 Domain과 Editor의 계약을 함께 검증할 때 저장소 루트(`D:\3D-render`)에서 다음 명령을 실행한다.
@@ -177,7 +193,7 @@ dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug 
 & .\scripts\Test-GodotRuntime.ps1
 ```
 
-Domain·Editor 테스트 실패 0, 구조 검사 PASS, `PROJECT_RUNTIME_READY`, `PROJECTION_SYNC_READY revision=1 top=1 world=1`, `GODOT_RUNTIME_VERIFICATION=PASS`가 모두 필요하다.
+Domain·Editor 테스트 실패 0, 구조 검사 PASS, `PROJECT_RUNTIME_READY`, `PROJECTION_SYNC_READY revision=1 top=1 world=1`, `BASIC_EDITING_*`, exact `TIMELINE_PLAYBACK_READY ...`, `GODOT_RUNTIME_VERIFICATION=PASS`가 모두 필요하다.
 
 ### Task 5 저장·가이드 가져오기·렌더링 기반
 
@@ -240,7 +256,8 @@ dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug 
 - 전체 아키텍처와 단계별 구현 계획 문서화
 - Godot .NET 프로젝트 골격과 Domain/Application/Infrastructure 계층 구현
 - 탑뷰 선택·이동·회전, 동일 미리보기의 3D 투영, 숫자 Inspector와 Undo/Redo 구현
-- 다음 구현 단위: 타임라인 스크럽·재생과 임의 시점 키프레임 편집
+- 읽기 전용 타임라인 3A: slider 스크럽, Play/Pause·Stop·Space, `(revision,time)` 동시 투영과 편집 잠금 구현
+- 다음 구현 단위: 임의 시점 변환 키프레임 생성·조회·수정·삭제(CRUD)
 
 ## 법적·운영 주의
 
