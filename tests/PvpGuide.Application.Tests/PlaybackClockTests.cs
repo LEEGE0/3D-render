@@ -6,9 +6,8 @@ namespace PvpGuide.Application.Tests;
 public sealed class PlaybackClockTests
 {
     [Fact]
-    public void Constructor_requires_positive_finite_duration_and_positive_frame_rate()
+    public void Constructor_requires_non_negative_finite_duration_and_positive_frame_rate()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new PlaybackClock(0, 30));
         Assert.Throws<ArgumentOutOfRangeException>(() => new PlaybackClock(-1, 30));
         Assert.Throws<ArgumentOutOfRangeException>(() => new PlaybackClock(double.PositiveInfinity, 30));
         Assert.Throws<ArgumentOutOfRangeException>(() => new PlaybackClock(1, 0));
@@ -19,6 +18,23 @@ public sealed class PlaybackClockTests
         Assert.Equal(24, clock.FramesPerSecond);
         Assert.Equal(0, clock.CurrentTimeSeconds);
         Assert.False(clock.IsPlaying);
+    }
+
+    [Fact]
+    public void Zero_duration_remains_paused_at_zero_for_all_controls()
+    {
+        var clock = new PlaybackClock(0, 30);
+        var changes = 0;
+        clock.Changed += (_, _) => changes++;
+
+        clock.Play();
+        clock.Advance(1);
+        clock.Seek(0);
+        clock.Stop();
+
+        Assert.Equal(0, clock.CurrentTimeSeconds);
+        Assert.False(clock.IsPlaying);
+        Assert.Equal(0, changes);
     }
 
     [Fact]

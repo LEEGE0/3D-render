@@ -13,9 +13,9 @@ public sealed class PlaybackClock : IPlaybackTimeSource
 
     public PlaybackClock(double durationSeconds, int framesPerSecond)
     {
-        if (!double.IsFinite(durationSeconds) || durationSeconds <= 0)
+        if (!double.IsFinite(durationSeconds) || durationSeconds < 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(durationSeconds), "Duration must be finite and positive.");
+            throw new ArgumentOutOfRangeException(nameof(durationSeconds), "Duration must be finite and non-negative.");
         }
 
         if (framesPerSecond <= 0)
@@ -49,9 +49,11 @@ public sealed class PlaybackClock : IPlaybackTimeSource
         return SetState(Math.Clamp(timeSeconds, 0, DurationSeconds), _requestedIsPlaying);
     }
 
-    public bool Play() => SetState(
-        _requestedTimeSeconds == DurationSeconds ? 0 : _requestedTimeSeconds,
-        true);
+    public bool Play() => DurationSeconds == 0
+        ? false
+        : SetState(
+            _requestedTimeSeconds == DurationSeconds ? 0 : _requestedTimeSeconds,
+            true);
 
     public bool Pause() => SetState(_requestedTimeSeconds, false);
 
