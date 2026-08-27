@@ -67,6 +67,124 @@ public sealed class ActorTrack
             ?? throw new ArgumentException($"Transform keyframe '{keyframeId}' does not exist.", nameof(keyframeId));
     }
 
+    public ActionKeyframe GetActionKeyframe(string keyframeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
+        return _actionKeyframes.SingleOrDefault(frame => frame.Id == keyframeId)
+            ?? throw new ArgumentException($"Action keyframe '{keyframeId}' does not exist.", nameof(keyframeId));
+    }
+
+    public LockOnKeyframe GetLockOnKeyframe(string keyframeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
+        return _lockOnKeyframes.SingleOrDefault(frame => frame.Id == keyframeId)
+            ?? throw new ArgumentException($"Lock-on keyframe '{keyframeId}' does not exist.", nameof(keyframeId));
+    }
+
+    public ActorTrack AddActionKeyframe(ActionKeyframe keyframe)
+    {
+        ArgumentNullException.ThrowIfNull(keyframe);
+        return new ActorTrack(
+            ActorId,
+            DisplayName,
+            Role,
+            _transformKeyframes,
+            _actionKeyframes.Append(keyframe),
+            _lockOnKeyframes);
+    }
+
+    public ActorTrack UpdateActionKeyframe(ActionKeyframe expectedCurrent, ActionKeyframe replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (replacement.Id != expectedCurrent.Id)
+        {
+            throw new ArgumentException("Replacement identity must remain unchanged.", nameof(replacement));
+        }
+
+        var current = GetActionKeyframe(expectedCurrent.Id);
+        ValidateExpected(current, expectedCurrent);
+        return new ActorTrack(
+            ActorId,
+            DisplayName,
+            Role,
+            _transformKeyframes,
+            _actionKeyframes.Select(frame => frame.Id == current.Id ? replacement : frame),
+            _lockOnKeyframes);
+    }
+
+    public ActorTrack RemoveActionKeyframe(ActionKeyframe expectedCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+
+        var current = GetActionKeyframe(expectedCurrent.Id);
+        ValidateExpected(current, expectedCurrent);
+        return new ActorTrack(
+            ActorId,
+            DisplayName,
+            Role,
+            _transformKeyframes,
+            _actionKeyframes.Where(frame => frame.Id != current.Id),
+            _lockOnKeyframes);
+    }
+
+    public ActorTrack AddLockOnKeyframe(LockOnKeyframe keyframe)
+    {
+        ArgumentNullException.ThrowIfNull(keyframe);
+        return new ActorTrack(
+            ActorId,
+            DisplayName,
+            Role,
+            _transformKeyframes,
+            _actionKeyframes,
+            _lockOnKeyframes.Append(keyframe));
+    }
+
+    public ActorTrack UpdateLockOnKeyframe(LockOnKeyframe expectedCurrent, LockOnKeyframe replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (replacement.Id != expectedCurrent.Id)
+        {
+            throw new ArgumentException("Replacement identity must remain unchanged.", nameof(replacement));
+        }
+
+        var current = GetLockOnKeyframe(expectedCurrent.Id);
+        ValidateExpected(current, expectedCurrent);
+        return new ActorTrack(
+            ActorId,
+            DisplayName,
+            Role,
+            _transformKeyframes,
+            _actionKeyframes,
+            _lockOnKeyframes.Select(frame => frame.Id == current.Id ? replacement : frame));
+    }
+
+    public ActorTrack RemoveLockOnKeyframe(LockOnKeyframe expectedCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+
+        var current = GetLockOnKeyframe(expectedCurrent.Id);
+        ValidateExpected(current, expectedCurrent);
+        return new ActorTrack(
+            ActorId,
+            DisplayName,
+            Role,
+            _transformKeyframes,
+            _actionKeyframes,
+            _lockOnKeyframes.Where(frame => frame.Id != current.Id));
+    }
+
+    public EvaluatedActionState EvaluateAction(double timeSeconds) =>
+        EvaluateHeld(_actionKeyframes, timeSeconds, static frame => frame.TimeSeconds) is { } frame
+            ? new(frame.Id, frame.ActionKey)
+            : new(null, null);
+
+    public EvaluatedLockOnState EvaluateLockOn(double timeSeconds) =>
+        EvaluateHeld(_lockOnKeyframes, timeSeconds, static frame => frame.TimeSeconds) is { } frame
+            ? new(frame.Id, frame.Enabled, frame.TargetActorId, frame.YawOffsetDegrees, frame.TrackingMode)
+            : new(null, false, null, 0, LockOnTrackingMode.Continuous);
+
     public ActorTrack ReplaceTransformKeyframe(
         TransformKeyframe expectedCurrent,
         TransformKeyframe replacement)
@@ -156,6 +274,29 @@ public sealed class ActorTrack
     private static EvaluatedTransform ToTransform(TransformKeyframe keyframe) =>
         new(keyframe.Position, keyframe.YawDegrees);
 
+    private static T? EvaluateHeld<T>(
+        IReadOnlyList<T> frames,
+        double timeSeconds,
+        Func<T, double> getTime)
+        where T : class
+    {
+        if (!double.IsFinite(timeSeconds))
+        {
+            throw new ArgumentOutOfRangeException(nameof(timeSeconds), "Evaluation time must be finite.");
+        }
+
+        for (var index = frames.Count - 1; index >= 0; index--)
+        {
+            var frame = frames[index];
+            if (getTime(frame) <= timeSeconds)
+            {
+                return frame;
+            }
+        }
+
+        return null;
+    }
+
     private static T[] CopySortedUnique<T>(
         IEnumerable<T> source,
         Func<T, double> getTime,
@@ -195,11 +336,40 @@ public sealed class ActorTrack
         left.Position == right.Position &&
         TransformKeyframe.NormalizeYaw(left.YawDegrees) == TransformKeyframe.NormalizeYaw(right.YawDegrees);
 
+    private static bool SameAction(ActionKeyframe left, ActionKeyframe right) =>
+        left.Id == right.Id &&
+        left.TimeSeconds == right.TimeSeconds &&
+        left.ActionKey == right.ActionKey;
+
+    private static bool SameLockOn(LockOnKeyframe left, LockOnKeyframe right) =>
+        left.Id == right.Id &&
+        left.TimeSeconds == right.TimeSeconds &&
+        left.Enabled == right.Enabled &&
+        left.TargetActorId == right.TargetActorId &&
+        left.YawOffsetDegrees == right.YawOffsetDegrees &&
+        left.TrackingMode == right.TrackingMode;
+
     private static void ValidateExpected(TransformKeyframe current, TransformKeyframe expected)
     {
         if (!SameTransform(current, expected))
         {
             throw new InvalidOperationException("The transform keyframe changed after the edit began.");
+        }
+    }
+
+    private static void ValidateExpected(ActionKeyframe current, ActionKeyframe expected)
+    {
+        if (!SameAction(current, expected))
+        {
+            throw new InvalidOperationException("The action keyframe changed after the edit began.");
+        }
+    }
+
+    private static void ValidateExpected(LockOnKeyframe current, LockOnKeyframe expected)
+    {
+        if (!SameLockOn(current, expected))
+        {
+            throw new InvalidOperationException("The lock-on keyframe changed after the edit began.");
         }
     }
 

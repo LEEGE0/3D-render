@@ -154,6 +154,102 @@ public sealed class SceneDocument : ISceneSnapshotSource
         return actor.GetTransformKeyframe(keyframeId);
     }
 
+    public void AddActionKeyframe(string actorId, ActionKeyframe keyframe)
+    {
+        ArgumentNullException.ThrowIfNull(keyframe);
+        EnsureTimeWithinDocument(keyframe.TimeSeconds, nameof(keyframe));
+
+        var actor = GetRequiredActor(actorId);
+        ReplaceActor(actor, actor.AddActionKeyframe(keyframe));
+        RaiseChanged();
+    }
+
+    public ActionKeyframe GetActionKeyframe(string actorId, string keyframeId)
+    {
+        var actor = GetRequiredActor(actorId);
+        return actor.GetActionKeyframe(keyframeId);
+    }
+
+    public bool UpdateActionKeyframe(
+        string actorId,
+        ActionKeyframe expectedCurrent,
+        ActionKeyframe replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+        ArgumentNullException.ThrowIfNull(replacement);
+        EnsureTimeWithinDocument(replacement.TimeSeconds, nameof(replacement));
+
+        var actor = GetRequiredActor(actorId);
+        var current = actor.GetActionKeyframe(expectedCurrent.Id);
+        ValidateExpected(current, expectedCurrent);
+        if (SameAction(current, replacement))
+        {
+            return false;
+        }
+
+        ReplaceActor(actor, actor.UpdateActionKeyframe(expectedCurrent, replacement));
+        RaiseChanged();
+        return true;
+    }
+
+    public void RemoveActionKeyframe(string actorId, ActionKeyframe expectedCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+
+        var actor = GetRequiredActor(actorId);
+        ReplaceActor(actor, actor.RemoveActionKeyframe(expectedCurrent));
+        RaiseChanged();
+    }
+
+    public void AddLockOnKeyframe(string actorId, LockOnKeyframe keyframe)
+    {
+        ArgumentNullException.ThrowIfNull(keyframe);
+        EnsureTimeWithinDocument(keyframe.TimeSeconds, nameof(keyframe));
+
+        var actor = GetRequiredActor(actorId);
+        ValidateLockOnTarget(actor.ActorId, keyframe.TargetActorId, nameof(keyframe));
+        ReplaceActor(actor, actor.AddLockOnKeyframe(keyframe));
+        RaiseChanged();
+    }
+
+    public LockOnKeyframe GetLockOnKeyframe(string actorId, string keyframeId)
+    {
+        var actor = GetRequiredActor(actorId);
+        return actor.GetLockOnKeyframe(keyframeId);
+    }
+
+    public bool UpdateLockOnKeyframe(
+        string actorId,
+        LockOnKeyframe expectedCurrent,
+        LockOnKeyframe replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+        ArgumentNullException.ThrowIfNull(replacement);
+        EnsureTimeWithinDocument(replacement.TimeSeconds, nameof(replacement));
+
+        var actor = GetRequiredActor(actorId);
+        ValidateLockOnTarget(actor.ActorId, replacement.TargetActorId, nameof(replacement));
+        var current = actor.GetLockOnKeyframe(expectedCurrent.Id);
+        ValidateExpected(current, expectedCurrent);
+        if (SameLockOn(current, replacement))
+        {
+            return false;
+        }
+
+        ReplaceActor(actor, actor.UpdateLockOnKeyframe(expectedCurrent, replacement));
+        RaiseChanged();
+        return true;
+    }
+
+    public void RemoveLockOnKeyframe(string actorId, LockOnKeyframe expectedCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+
+        var actor = GetRequiredActor(actorId);
+        ReplaceActor(actor, actor.RemoveLockOnKeyframe(expectedCurrent));
+        RaiseChanged();
+    }
+
     public bool ReplaceTransformKeyframe(
         string actorId,
         TransformKeyframe expectedCurrent,
@@ -209,12 +305,16 @@ public sealed class SceneDocument : ISceneSnapshotSource
         EnsureTimeWithinDocument(timeSeconds, nameof(timeSeconds));
 
         var evaluatedTransforms = new Dictionary<string, EvaluatedTransform>(_actors.Count, StringComparer.Ordinal);
+        var evaluatedTimelineStates = new Dictionary<string, EvaluatedActorTimelineState>(_actors.Count, StringComparer.Ordinal);
         foreach (var actor in _actors)
         {
             evaluatedTransforms.Add(actor.ActorId, actor.Evaluate(timeSeconds));
+            evaluatedTimelineStates.Add(actor.ActorId, new EvaluatedActorTimelineState(
+                actor.EvaluateAction(timeSeconds),
+                actor.EvaluateLockOn(timeSeconds)));
         }
 
-        return new SceneSnapshot(DocumentId, Revision, timeSeconds, evaluatedTransforms);
+        return new SceneSnapshot(DocumentId, Revision, timeSeconds, evaluatedTransforms, evaluatedTimelineStates);
     }
 
     private void EnsureTimeWithinDocument(double timeSeconds, string parameterName)
@@ -241,11 +341,46 @@ public sealed class SceneDocument : ISceneSnapshotSource
         }
     }
 
+    private static void ValidateExpected(ActionKeyframe current, ActionKeyframe expected)
+    {
+        if (!SameAction(current, expected))
+        {
+            throw new InvalidOperationException("The action keyframe changed after the edit began.");
+        }
+    }
+
+    private static void ValidateExpected(LockOnKeyframe current, LockOnKeyframe expected)
+    {
+        if (!SameLockOn(current, expected))
+        {
+            throw new InvalidOperationException("The lock-on keyframe changed after the edit began.");
+        }
+    }
+
     private static bool SameTransform(TransformKeyframe left, TransformKeyframe right) =>
         left.Id == right.Id &&
         left.TimeSeconds == right.TimeSeconds &&
         left.Position == right.Position &&
         TransformKeyframe.NormalizeYaw(left.YawDegrees) == TransformKeyframe.NormalizeYaw(right.YawDegrees);
+
+    private static bool SameAction(ActionKeyframe left, ActionKeyframe right) =>
+        left.Id == right.Id &&
+        left.TimeSeconds == right.TimeSeconds &&
+        left.ActionKey == right.ActionKey;
+
+    private static bool SameLockOn(LockOnKeyframe left, LockOnKeyframe right) =>
+        left.Id == right.Id &&
+        left.TimeSeconds == right.TimeSeconds &&
+        left.Enabled == right.Enabled &&
+        left.TargetActorId == right.TargetActorId &&
+        left.YawOffsetDegrees == right.YawOffsetDegrees &&
+        left.TrackingMode == right.TrackingMode;
+
+    private void ReplaceActor(ActorTrack current, ActorTrack replacement)
+    {
+        _actorsById[current.ActorId] = replacement;
+        _actors[_actors.IndexOf(current)] = replacement;
+    }
 
     private void ValidateActor(ActorTrack actor, IEnumerable<string> actorIds, string parameterName)
     {
@@ -273,6 +408,15 @@ public sealed class SceneDocument : ISceneSnapshotSource
             {
                 throw new ArgumentException("Lock-on targets must name a different actor in the same document.", parameterName);
             }
+        }
+    }
+
+    private void ValidateLockOnTarget(string actorId, string? targetActorId, string parameterName)
+    {
+        if (targetActorId is not null &&
+            (targetActorId == actorId || !_actorsById.ContainsKey(targetActorId)))
+        {
+            throw new ArgumentException("Lock-on targets must name a different actor in the same document.", parameterName);
         }
     }
 

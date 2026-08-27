@@ -3,6 +3,17 @@ namespace PvpGuide.Domain.Timeline;
 public sealed class LockOnKeyframe
 {
     public LockOnKeyframe(string id, double timeSeconds, bool enabled, string? targetActorId)
+        : this(id, timeSeconds, enabled, targetActorId, 0, LockOnTrackingMode.Continuous)
+    {
+    }
+
+    public LockOnKeyframe(
+        string id,
+        double timeSeconds,
+        bool enabled,
+        string? targetActorId,
+        double yawOffsetDegrees,
+        LockOnTrackingMode trackingMode)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(id);
         if (!double.IsFinite(timeSeconds) || timeSeconds < 0)
@@ -20,10 +31,17 @@ public sealed class LockOnKeyframe
             throw new ArgumentException("Enabled lock-on keyframes require a target actor.", nameof(targetActorId));
         }
 
+        if (!double.IsFinite(yawOffsetDegrees))
+        {
+            throw new ArgumentOutOfRangeException(nameof(yawOffsetDegrees), "Yaw offset must be finite.");
+        }
+
         Id = id;
         TimeSeconds = timeSeconds;
         Enabled = enabled;
         TargetActorId = targetActorId;
+        YawOffsetDegrees = NormalizeYawOffset(yawOffsetDegrees);
+        TrackingMode = trackingMode;
     }
 
     public string Id { get; }
@@ -33,4 +51,19 @@ public sealed class LockOnKeyframe
     public bool Enabled { get; }
 
     public string? TargetActorId { get; }
+
+    public double YawOffsetDegrees { get; }
+
+    public LockOnTrackingMode TrackingMode { get; }
+
+    internal static double NormalizeYawOffset(double yawOffsetDegrees)
+    {
+        var normalized = yawOffsetDegrees % 360;
+        if (normalized >= 180)
+        {
+            return normalized - 360;
+        }
+
+        return normalized < -180 ? normalized + 360 : normalized;
+    }
 }

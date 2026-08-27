@@ -462,6 +462,196 @@ public sealed class SceneDocumentTests
         Assert.Equal("same", allowed.LockOnKeyframes[0].Id);
     }
 
+    [Fact]
+    public void Snapshot_evaluates_action_and_lock_as_left_hold_states()
+    {
+        var document = CreateSemanticDocument();
+
+        var before = document.CreateSnapshot(0.25).ActorTimelineStates["host"];
+        Assert.Null(before.Action.ActionKey);
+        Assert.False(before.LockOn.Enabled);
+
+        var between = document.CreateSnapshot(1.5).ActorTimelineStates["host"];
+        Assert.Equal("attack", between.Action.ActionKey);
+        Assert.Equal("host-action-1", between.Action.SourceKeyframeId);
+        Assert.True(between.LockOn.Enabled);
+        Assert.Equal("invader", between.LockOn.TargetActorId);
+        Assert.Equal(LockOnTrackingMode.Continuous, between.LockOn.TrackingMode);
+    }
+
+    [Fact]
+    public void Action_update_and_remove_require_full_current_preimage()
+    {
+        var document = CreateSemanticDocument();
+        var before = document.GetActionKeyframe("host", "host-action-1");
+        var after = new ActionKeyframe(before.Id, 1.25, "roll");
+
+        Assert.True(document.UpdateActionKeyframe("host", before, after));
+        Assert.False(document.UpdateActionKeyframe("host", after, after));
+        Assert.Throws<InvalidOperationException>(() =>
+            document.RemoveActionKeyframe("host", before));
+        Assert.Equal(1, document.Revision);
+    }
+
+    [Fact]
+    public void Action_add_replaces_the_held_state_and_preserves_actor_metadata()
+    {
+        var document = CreateSemanticDocument();
+
+        document.AddActionKeyframe("host", new ActionKeyframe("host-action-2", 2, "roll"));
+
+        var host = document.Actors.Single(actor => actor.ActorId == "host");
+        Assert.Equal(["host-action-1", "host-action-2"], host.ActionKeyframes.Select(frame => frame.Id));
+        Assert.Equal("roll", document.CreateSnapshot(2).ActorTimelineStates["host"].Action.ActionKey);
+        Assert.Equal("Host", host.DisplayName);
+        Assert.Equal("Hero", host.Role);
+    }
+
+    [Fact]
+    public void Lock_on_mutation_validates_target_and_normalizes_offset()
+    {
+        var document = CreateSemanticDocument();
+        var frame = new LockOnKeyframe(
+            "host-lock-2", 2, true, "invader", 190, LockOnTrackingMode.Snap);
+
+        document.AddLockOnKeyframe("host", frame);
+
+        Assert.Equal(-170, document.GetLockOnKeyframe("host", frame.Id).YawOffsetDegrees);
+        Assert.Throws<ArgumentException>(() => document.AddLockOnKeyframe(
+            "host",
+            new LockOnKeyframe("self", 2.5, true, "host", 0, LockOnTrackingMode.Continuous)));
+    }
+
+    [Fact]
+    public void Lock_on_update_and_remove_require_full_current_preimage()
+    {
+        var document = CreateSemanticDocument();
+        var before = document.GetLockOnKeyframe("host", "host-lock-1");
+        var after = new LockOnKeyframe(before.Id, 1.25, false, "invader", -190, LockOnTrackingMode.Snap);
+
+        Assert.True(document.UpdateLockOnKeyframe("host", before, after));
+        Assert.False(document.UpdateLockOnKeyframe("host", after, after));
+        var current = document.GetLockOnKeyframe("host", after.Id);
+        Assert.Equal(170, current.YawOffsetDegrees);
+        Assert.Throws<InvalidOperationException>(() => document.RemoveLockOnKeyframe(
+            "host", new LockOnKeyframe(current.Id, current.TimeSeconds, current.Enabled, current.TargetActorId, current.YawOffsetDegrees, LockOnTrackingMode.Continuous)));
+        Assert.Equal(1, document.Revision);
+    }
+
+    [Fact]
+    public void Snapshot_holds_semantic_markers_at_boundaries_and_defensively_copies_states()
+    {
+        var document = SceneDocument.Create(
+            "semantic-boundaries",
+            "Semantic boundaries",
+            null,
+            10,
+            30,
+            [
+                new ActorTrack(
+                    "host",
+                    "Host",
+                    "Hero",
+                    [new TransformKeyframe("host-transform", 0, new Position3(0, 0, 0), 0)],
+                    [
+                        new ActionKeyframe("action-first", 1, "idle"),
+                        new ActionKeyframe("action-last", 3, "attack"),
+                    ],
+                    [
+                        new LockOnKeyframe("lock-first", 1, true, "invader", -190, LockOnTrackingMode.Snap),
+                        new LockOnKeyframe("lock-last", 3, false, "invader", 20, LockOnTrackingMode.KeyframeOnly),
+                    ]),
+                new ActorTrack("invader", [new TransformKeyframe("invader-transform", 0, new Position3(1, 0, 0), 0)])
+            ]);
+
+        var before = document.CreateSnapshot(0.5).ActorTimelineStates["host"];
+        var exact = document.CreateSnapshot(1).ActorTimelineStates["host"];
+        var between = document.CreateSnapshot(2).ActorTimelineStates["host"];
+        var after = document.CreateSnapshot(10).ActorTimelineStates["host"];
+
+        Assert.Equal(new EvaluatedActionState(null, null), before.Action);
+        Assert.Equal(new EvaluatedLockOnState(null, false, null, 0, LockOnTrackingMode.Continuous), before.LockOn);
+        Assert.Equal("action-first", exact.Action.SourceKeyframeId);
+        Assert.Equal(170, exact.LockOn.YawOffsetDegrees);
+        Assert.Equal("idle", between.Action.ActionKey);
+        Assert.True(between.LockOn.Enabled);
+        Assert.Equal("action-last", after.Action.SourceKeyframeId);
+        Assert.False(after.LockOn.Enabled);
+        Assert.Equal("invader", after.LockOn.TargetActorId);
+        Assert.Equal(LockOnTrackingMode.KeyframeOnly, after.LockOn.TrackingMode);
+
+        var source = new Dictionary<string, EvaluatedActorTimelineState>
+        {
+            ["host"] = exact
+        };
+        var snapshot = new SceneSnapshot("copy", 0, 0, new Dictionary<string, EvaluatedTransform>(), source);
+        source.Clear();
+        Assert.Single(snapshot.ActorTimelineStates);
+        Assert.Throws<NotSupportedException>(() => ((IDictionary<string, EvaluatedActorTimelineState>)snapshot.ActorTimelineStates).Add("intruder", exact));
+    }
+
+    [Fact]
+    public void Empty_semantic_tracks_evaluate_to_default_states()
+    {
+        var document = SceneDocument.Create(
+            "empty-semantic",
+            "Empty semantic",
+            null,
+            1,
+            30,
+            [new ActorTrack("host", [new TransformKeyframe("transform", 0, new Position3(0, 0, 0), 0)])]);
+
+        var state = document.CreateSnapshot(1).ActorTimelineStates["host"];
+
+        Assert.Equal(new EvaluatedActionState(null, null), state.Action);
+        Assert.Equal(new EvaluatedLockOnState(null, false, null, 0, LockOnTrackingMode.Continuous), state.LockOn);
+    }
+
+    [Fact]
+    public void Semantic_mutations_reject_invalid_requests_without_changing_document_and_allow_last_deletes()
+    {
+        var document = CreateSemanticDocument();
+        var originalActor = document.Actors.Single(actor => actor.ActorId == "host");
+        var originalTransform = originalActor.TransformKeyframes.Single();
+        var notifications = 0;
+        document.Changed += (_, _) => notifications++;
+
+        Assert.Throws<ArgumentException>(() => document.AddActionKeyframe(
+            "host", new ActionKeyframe("duplicate-time", 1, "roll")));
+        Assert.Throws<ArgumentException>(() => document.AddActionKeyframe(
+            "host", new ActionKeyframe("host-action-1", 2, "roll")));
+        Assert.Throws<ArgumentException>(() => document.AddLockOnKeyframe(
+            "host", new LockOnKeyframe("duplicate-lock-time", 1, false, null)));
+        Assert.Throws<ArgumentOutOfRangeException>(() => document.AddActionKeyframe(
+            "host", new ActionKeyframe("outside-action", 11, "roll")));
+        Assert.Throws<ArgumentOutOfRangeException>(() => document.AddLockOnKeyframe(
+            "host", new LockOnKeyframe("outside-lock", 11, false, null)));
+        Assert.Throws<ArgumentException>(() => document.AddLockOnKeyframe(
+            "host", new LockOnKeyframe("missing-target", 2, true, "missing", 0, LockOnTrackingMode.Snap)));
+        Assert.Throws<ArgumentException>(() => document.AddLockOnKeyframe(
+            "host", new LockOnKeyframe("self-target", 2, true, "host", 0, LockOnTrackingMode.Snap)));
+        foreach (var nonFiniteValue in NonFiniteValues)
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new LockOnKeyframe(
+                "nonfinite", 2, false, null, nonFiniteValue, LockOnTrackingMode.Continuous));
+        }
+
+        document.AddLockOnKeyframe(
+            "host", new LockOnKeyframe("disabled-candidate", 2, false, "invader", 0, LockOnTrackingMode.Continuous));
+        document.RemoveLockOnKeyframe("host", document.GetLockOnKeyframe("host", "disabled-candidate"));
+        document.RemoveActionKeyframe("host", document.GetActionKeyframe("host", "host-action-1"));
+        document.RemoveLockOnKeyframe("host", document.GetLockOnKeyframe("host", "host-lock-1"));
+
+        var host = document.Actors.Single(actor => actor.ActorId == "host");
+        Assert.Empty(host.ActionKeyframes);
+        Assert.Empty(host.LockOnKeyframes);
+        Assert.Equal("Host", host.DisplayName);
+        Assert.Equal("Hero", host.Role);
+        Assert.Equal(originalTransform, host.TransformKeyframes.Single());
+        Assert.Equal(4, document.Revision);
+        Assert.Equal(4, notifications);
+    }
+
     private static SceneDocument CreateEditableDocument()
     {
         return SceneDocument.Create(
@@ -486,6 +676,32 @@ public sealed class SceneDocumentTests
                     "Target",
                     "Enemy",
                     [new TransformKeyframe("target-first", 1, new Position3(7, 0, 8), 180)], [], [])
+            ]);
+    }
+
+    private static SceneDocument CreateSemanticDocument()
+    {
+        return SceneDocument.Create(
+            "semantic-document",
+            "Semantic",
+            null,
+            10,
+            30,
+            [
+                new ActorTrack(
+                    "host",
+                    "Host",
+                    "Hero",
+                    [new TransformKeyframe("host-transform", 0, new Position3(0, 0, 0), 0)],
+                    [new ActionKeyframe("host-action-1", 1, "attack")],
+                    [new LockOnKeyframe("host-lock-1", 1, true, "invader", 15, LockOnTrackingMode.Continuous)]),
+                new ActorTrack(
+                    "invader",
+                    "Invader",
+                    "Enemy",
+                    [new TransformKeyframe("invader-transform", 0, new Position3(1, 0, 0), 180)],
+                    [],
+                    [])
             ]);
     }
 }

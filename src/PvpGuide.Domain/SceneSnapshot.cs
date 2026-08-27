@@ -1,4 +1,5 @@
 using System.Collections.ObjectModel;
+using PvpGuide.Domain.Timeline;
 
 namespace PvpGuide.Domain;
 
@@ -42,15 +43,28 @@ public sealed class SceneSnapshot
         long revision,
         double timeSeconds,
         IReadOnlyDictionary<string, EvaluatedTransform> actorTransforms)
+        : this(documentId, revision, timeSeconds, actorTransforms, new Dictionary<string, EvaluatedActorTimelineState>())
+    {
+    }
+
+    public SceneSnapshot(
+        string documentId,
+        long revision,
+        double timeSeconds,
+        IReadOnlyDictionary<string, EvaluatedTransform> actorTransforms,
+        IReadOnlyDictionary<string, EvaluatedActorTimelineState> actorTimelineStates)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(documentId);
         ArgumentNullException.ThrowIfNull(actorTransforms);
+        ArgumentNullException.ThrowIfNull(actorTimelineStates);
 
         DocumentId = documentId;
         Revision = revision;
         TimeSeconds = timeSeconds;
         ActorTransforms = new ReadOnlyDictionary<string, EvaluatedTransform>(
             new Dictionary<string, EvaluatedTransform>(actorTransforms));
+        ActorTimelineStates = new ReadOnlyDictionary<string, EvaluatedActorTimelineState>(
+            new Dictionary<string, EvaluatedActorTimelineState>(actorTimelineStates));
     }
 
     public string DocumentId { get; }
@@ -60,4 +74,6 @@ public sealed class SceneSnapshot
     public double TimeSeconds { get; }
 
     public IReadOnlyDictionary<string, EvaluatedTransform> ActorTransforms { get; }
+
+    public IReadOnlyDictionary<string, EvaluatedActorTimelineState> ActorTimelineStates { get; }
 }
