@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Join-Path $RepositoryRoot 'src\PvpGuide.Editor'
 $domainRoot = Join-Path $RepositoryRoot 'src\PvpGuide.Domain'
 $testRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Domain.Tests'
+$editorTestRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Editor.Tests'
 $requiredFiles = @(
     (Join-Path $projectRoot 'project.godot'),
     (Join-Path $projectRoot 'PvpGuide.Editor.csproj'),
@@ -15,8 +16,16 @@ $requiredFiles = @(
     (Join-Path $projectRoot 'Scenes\Main\Main.cs'),
     (Join-Path $domainRoot 'PvpGuide.Domain.csproj'),
     (Join-Path $domainRoot 'DomainAssembly.cs'),
+    (Join-Path $domainRoot 'SceneDocument.cs'),
+    (Join-Path $domainRoot 'SceneSnapshot.cs'),
+    (Join-Path $domainRoot 'Actors\ActorTrack.cs'),
+    (Join-Path $domainRoot 'Timeline\TransformKeyframe.cs'),
+    (Join-Path $projectRoot 'Features\ViewportSync\SceneProjectionController.cs'),
     (Join-Path $testRoot 'PvpGuide.Domain.Tests.csproj'),
-    (Join-Path $testRoot 'DomainAssemblyTests.cs')
+    (Join-Path $testRoot 'DomainAssemblyTests.cs'),
+    (Join-Path $testRoot 'SceneDocumentTests.cs'),
+    (Join-Path $editorTestRoot 'PvpGuide.Editor.Tests.csproj'),
+    (Join-Path $editorTestRoot 'SceneProjectionControllerTests.cs')
 )
 
 foreach ($requiredFile in $requiredFiles) {
@@ -50,6 +59,7 @@ Assert-Contains $projectFile 'renderer/rendering_method="forward_plus"' 'Forward
 Assert-Contains $csprojFile 'Godot\.NET\.Sdk/4\.7\.2' 'Godot .NET SDK 버전'
 Assert-Contains $csprojFile '<TargetFramework>net8\.0</TargetFramework>' '.NET 대상 프레임워크'
 Assert-Contains $csprojFile '<EnableDynamicLoading>true</EnableDynamicLoading>' 'Godot 동적 로딩 설정'
+Assert-Contains $csprojFile '\.\./PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Editor에서 Domain 프로젝트 참조'
 Assert-Contains $testProjectFile '\.\./\.\./src/PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Domain 프로젝트 참조'
 
 foreach ($nodeName in @('TopViewPanel', 'WorldViewPanel', 'TimelinePanel', 'InspectorPanel')) {

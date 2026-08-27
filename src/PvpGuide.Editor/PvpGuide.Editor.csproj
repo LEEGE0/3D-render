@@ -6,4 +6,8 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../PvpGuide.Domain/PvpGuide.Domain.csproj" />
+  </ItemGroup>
 </Project>

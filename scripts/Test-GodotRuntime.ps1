@@ -23,7 +23,7 @@ function Invoke-GodotStep {
     param(
         [string]$Name,
         [string[]]$Arguments,
-        [string]$RequiredOutput = ''
+        [string[]]$RequiredOutput = @()
     )
 
     $output = (& $GodotExecutable @Arguments 2>&1 | Out-String)
@@ -39,8 +39,10 @@ function Invoke-GodotStep {
         throw "$Name 단계 출력에서 오류를 발견했습니다."
     }
 
-    if ($RequiredOutput -and $output -notmatch [regex]::Escape($RequiredOutput)) {
-        throw "$Name 단계 출력에 필수 표식 '$RequiredOutput'이 없습니다."
+    foreach ($requiredMarker in $RequiredOutput) {
+        if ($output -notmatch [regex]::Escape($requiredMarker)) {
+            throw "$Name 단계 출력에 필수 표식 '$requiredMarker'이 없습니다."
+        }
     }
 }
 
@@ -62,6 +64,9 @@ Invoke-GodotStep -Name '메인 장면 실행' -Arguments @(
     '--path', $projectRoot,
     '--scene', 'res://Scenes/Main/Main.tscn',
     '--quit-after', '2'
-) -RequiredOutput 'PROJECT_RUNTIME_READY'
+) -RequiredOutput @(
+    'PROJECT_RUNTIME_READY',
+    'PROJECTION_SYNC_READY revision=1 top=1 world=1'
+)
 
 Write-Output 'GODOT_RUNTIME_VERIFICATION=PASS'

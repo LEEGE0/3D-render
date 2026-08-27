@@ -104,6 +104,32 @@ dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug 
 
 `Test-ProjectSkeleton.ps1`은 `.sln`, `project.godot`, 메인 장면·스크립트, Domain 프로젝트·소스, 테스트 프로젝트·소스의 존재와 C#·Forward Plus·`Godot.NET.Sdk/4.7.2`·`net8.0` 설정 및 네 패널을 검사한다. `Test-GodotRuntime.ps1`은 위의 D 드라이브 Godot 콘솔을 사용해 .NET 빌드, 리소스 import, Godot 솔루션 빌드, 메인 장면 실행을 차례로 수행한다. 모든 명령은 종료 코드 0이어야 하며, xUnit 테스트 실패는 0개, 장면 출력에는 `PROJECT_RUNTIME_READY`, 최종 출력에는 `GODOT_RUNTIME_VERIFICATION=PASS`가 있어야 한다.
 
+### Task 4 SceneDocument와 동시 뷰 투영 개발·검증
+
+Task 4의 Domain은 Godot 타입에 의존하지 않는 `SceneDocument`를 단일 진실 공급원으로 사용한다. 가이드 좌표는 x축 오른쪽 양수·y축 아래쪽 양수이며, 내부 3D에서는 guide x를 world X로, guide y를 world Z로 매핑하고 world Y는 높이로 사용한다. 방향각은 0° 오른쪽·90° 아래·180° 왼쪽·270° 위다.
+
+- `Position3`은 유한한 `double X/Y/Z` 성분을 가진다.
+- `TransformKeyframe`은 비어 있지 않은 ID, 유한하고 0 이상인 시간, 유한한 위치와 yaw를 요구하며 yaw를 `[0, 360)`으로 정규화한다.
+- `ActorTrack`은 안정적인 배우 ID와 시간 오름차순의 읽기 전용 키프레임 목록을 가지며, 동일한 정확한 시간의 키프레임은 거부한다. 빈 트랙 평가는 허용하지 않는다.
+- 위치는 선형 보간하고 yaw는 0/360 경계에서 최단 경로로 보간한다. 정확히 180°가 동률이면 양의 방향을 선택한다. 첫 키 이전은 첫 상태, 마지막 키 이후는 마지막 상태다.
+- `SceneDocument`는 `pvp-guide-scene/1` 스키마, 문서 ID, 길이, FPS, 고유 배우 목록과 monotonic revision을 소유한다. 문서 길이와 평가 시간은 유한하고 범위 안이어야 한다.
+- 성공한 배우·키프레임 추가는 revision을 정확히 1 올리고 변경 이벤트를 정확히 한 번 발생시킨다. 실패한 변경은 revision·이벤트·기존 데이터를 바꾸지 않는다. 선택 배우·현재 시간·활성 도구 등 세션 상태와 Godot `Node`·`Vector*`·`Resource`는 Domain에 넣지 않는다.
+- `CreateSnapshot(timeSeconds)`는 문서 ID, revision, 평가 시간과 배우별 평가 변환을 불변·방어 복사 형태의 `SceneSnapshot`으로 반환한다.
+- `ISceneProjectionConsumer.Apply(SceneSnapshot)`은 Godot 타입이 없는 포트다. `SceneProjectionController`는 하나의 snapshot source와 서로 다른 top/world consumer를 주입받고, 문서 변경 event 1회당 snapshot을 한 번만 만들어 동일 인스턴스를 두 소비자에게 각각 한 번 전달한다. 같은 revision 이벤트는 중복 전달하지 않으며 Dispose 이후에는 전달하지 않는다.
+- 기존 Main 장면은 실제 Domain 문서와 두 Panel 소비자를 조립해 변경 1회 뒤 `PROJECTION_SYNC_READY revision=1 top=1 world=1`을 출력하고, controller는 `_ExitTree`에서 해제한다.
+
+Domain과 Editor의 계약을 함께 검증할 때 저장소 루트(`D:\3D-render`)에서 다음 명령을 실행한다.
+
+```powershell
+$env:NUGET_PACKAGES = 'D:\3D-render\tools\nuget-packages'
+dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo
+& .\scripts\Test-ProjectSkeleton.ps1
+& .\scripts\Test-GodotRuntime.ps1
+```
+
+Domain·Editor 테스트 실패 0, 구조 검사 PASS, `PROJECT_RUNTIME_READY`, `PROJECTION_SYNC_READY revision=1 top=1 world=1`, `GODOT_RUNTIME_VERIFICATION=PASS`가 모두 필요하다.
+
 ## Git 작업 방식
 
 - 기능 브랜치에서 작업한다.

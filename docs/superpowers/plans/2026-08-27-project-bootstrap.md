@@ -140,34 +140,53 @@
 
 **Files:**
 - Create: `src/PvpGuide.Domain/SceneDocument.cs`
+- Create: `src/PvpGuide.Domain/SceneSnapshot.cs`
 - Create: `src/PvpGuide.Domain/Actors/ActorTrack.cs`
 - Create: `src/PvpGuide.Domain/Timeline/TransformKeyframe.cs`
 - Create: `src/PvpGuide.Editor/Features/ViewportSync/SceneProjectionController.cs`
+- Modify: `src/PvpGuide.Editor/PvpGuide.Editor.csproj` (Domain ProjectReference)
+- Modify: `src/PvpGuide.Editor/Scenes/Main/Main.cs` (런타임 조립 smoke)
 - Test: `tests/PvpGuide.Domain.Tests/SceneDocumentTests.cs`
+- Create: `tests/PvpGuide.Editor.Tests/PvpGuide.Editor.Tests.csproj`
+- Create: `tests/PvpGuide.Editor.Tests/SceneProjectionControllerTests.cs`
+- Modify: `scripts/Test-ProjectSkeleton.ps1` (Task 4 파일과 Editor→Domain 참조 검사)
+- Modify: `scripts/Test-GodotRuntime.ps1` (projection marker 검증)
 
 **Interfaces:**
 - Consumes: 가이드 좌표계 `x=오른쪽+`, `y=아래쪽+`, 방향각 `0/90/180/270`
-- Produces: `SceneDocument`, `ActorTrack`, `TransformKeyframe`, 2D/3D 동기화 이벤트
+- Produces: `SceneDocument`, `SceneSnapshot`, `ActorTrack`, `TransformKeyframe`, 2D/3D 동기화 이벤트와 동일 snapshot 인스턴스 투영
 
-- [ ] **Step 1: 좌표와 키프레임 보간 테스트를 먼저 작성하고 실패를 확인한다**
+- [x] **Step 1: Domain 및 Editor 테스트를 먼저 작성하고 RED를 확인한다**
 
-  두 키프레임 사이 위치·각도 보간, 각도 360도 경계의 최단 회전, 같은 시간 키프레임 거부를 검사한다.
+  `SceneDocumentTests.cs`에서 유한 좌표·키프레임 입력 검증, 시간 오름차순과 동일 시간 거부, 첫 키 이전·마지막 키 이후의 고정 상태, 위치 선형 보간을 검사한다. yaw는 0/360 경계 최단 경로와 정확히 180° 동률의 양의 방향을 검사하며, 필수 사례로 (t=2, `(-2,4,10)`, 350°)와 (t=6, `(6,-4,2)`, 10°)를 t=3에서 `(0,2,8)`, 355°, t=4에서 `(2,0,6)`, 0°로 단언한다. 역방향 10→350의 중간값 0°, 0→180의 90°, 180→0의 270°도 포함한다. `SceneProjectionControllerTests.cs`에서는 snapshot 1회 생성, top/world 각각 동일 인스턴스 1회 전달, 같은 revision 중복 억제, 다음 revision 전달, Dispose 이후 미전달을 검사한다. 테스트를 먼저 실행해 누락 타입·행동 때문에 실패하는 실제 RED 결과를 기록한다.
 
-- [ ] **Step 2: 최소 도메인 모델을 구현한다**
+- [x] **Step 2: SceneDocument와 평가 snapshot 도메인 모델을 구현한다**
 
-  문서 ID, 스키마 버전, 시간축, 배우 트랙과 선택 상태를 분리하며 Godot 노드 타입을 도메인에 노출하지 않는다.
+  `Position3`, `TransformKeyframe`, `ActorTrack`, `SceneDocument`, `SceneSnapshot`을 구현한다. 문서 ID·`pvp-guide-scene/1` 스키마·길이·FPS·고유 배우 목록·monotonic revision을 보유하고, 성공한 배우/키프레임 추가마다 revision을 1 증가시키며 변경 이벤트를 정확히 한 번 발생시킨다. 실패한 변경은 revision·이벤트·기존 데이터를 보존한다. `CreateSnapshot(timeSeconds)`는 문서 ID, revision, 평가 시간과 배우별 평가 변환을 불변·방어 복사 형태로 반환하며 Godot `Node`, `Vector*`, `Resource`나 선택 배우·현재 시간·활성 도구 같은 세션 상태를 노출하지 않는다.
 
-- [ ] **Step 3: 탑뷰와 3D 투영 컨트롤러를 연결한다**
+- [x] **Step 3: Editor 참조와 동시 투영 컨트롤러를 연결한다**
 
-  문서 변경 한 번이 두 뷰를 갱신하고, 한 뷰의 조작은 명령을 통해 문서에 반영되도록 한다.
+  `PvpGuide.Editor.csproj`에 Domain ProjectReference를 추가하고 `ISceneProjectionConsumer.Apply(SceneSnapshot)` 포트와 `SceneProjectionController`를 구현한다. controller는 하나의 snapshot source와 서로 다른 top/world consumer를 생성자 주입받으며 문서 변경 event 1회마다 `CreateSnapshot`을 한 번 호출하고 반환된 동일 snapshot을 두 소비자에게 각각 한 번 전달한다. 동일 revision 이벤트는 중복 전달하지 않고, 다음 revision은 각각 한 번 전달하며 Dispose 이후 전달하지 않는다. 뷰 소비자가 문서를 직접 수정하거나 서로의 상태를 복사하지 않도록 경계를 유지한다.
 
-- [ ] **Step 4: 테스트와 헤드리스 장면 로드를 검증한다**
+- [x] **Step 4: Main smoke, 구조 검사와 전체 테스트를 검증한다**
 
-  Expected: 모든 보간·동기화 테스트 통과, Godot 장면 로드 종료 코드 0.
+  `Main.cs`에서 최소 실제 Domain 문서와 두 Panel 소비자를 조립하고 변경 1회 후 `PROJECTION_SYNC_READY revision=1 top=1 world=1`을 출력한다. controller는 `_ExitTree`에서 해제한다. `Test-ProjectSkeleton.ps1`은 새 Domain·Editor 소스/테스트 파일과 Editor→Domain ProjectReference를 검사하고, `Test-GodotRuntime.ps1`은 projection marker를 검증하도록 갱신한다.
 
-- [ ] **Step 5: 커밋하고 푸시한다**
+  Run:
 
-  도메인, 동기화, 테스트 파일만 커밋하고 현재 브랜치를 푸시한다.
+  ```powershell
+  $env:NUGET_PACKAGES = 'D:\3D-render\tools\nuget-packages'
+  dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo
+  dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo
+  & .\scripts\Test-ProjectSkeleton.ps1
+  & .\scripts\Test-GodotRuntime.ps1
+  ```
+
+  Expected: Domain·Editor 테스트 실패 0, 구조 검사 PASS, Godot 헤드리스 장면 로드 종료 코드 0, `PROJECT_RUNTIME_READY`, `PROJECTION_SYNC_READY revision=1 top=1 world=1`, `GODOT_RUNTIME_VERIFICATION=PASS` 출력.
+
+- [x] **Step 5: 변경 경로를 확인하고 커밋·푸시한다**
+
+  Task 4에서 변경한 Domain·Editor·Main·테스트·검증 스크립트와 이 계획 문서 및 README만 명시적으로 스테이징하고, 메인 에이전트가 최신 검증 후 커밋·푸시한다. `bin`, `obj`, `.godot`, 도구·캐시는 포함하지 않는다.
 
 ### Task 5: 저장·가이드 가져오기·렌더링 기반
 
