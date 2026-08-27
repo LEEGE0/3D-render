@@ -26,6 +26,11 @@ public sealed class DocumentSession
 
     public bool CanRedo => _redoStack.Count > 0;
 
+    public IReadOnlyList<ActorDisplayInfo> ActorDisplayInfos => Array.AsReadOnly(
+        _document.Actors
+            .Select(actor => new ActorDisplayInfo(actor.ActorId, actor.DisplayName, actor.Role))
+            .ToArray());
+
     internal int UndoCount => _undoStack.Count;
 
     internal int RedoCount => _redoStack.Count;
@@ -33,6 +38,16 @@ public sealed class DocumentSession
     public event EventHandler<SelectionChangedEventArgs>? SelectionChanged;
 
     public event EventHandler<TransformPreviewChangedEventArgs>? PreviewChanged;
+
+    public event EventHandler? HistoryChanged;
+
+    public ActorDisplayInfo GetActorDisplayInfo(string actorId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        var actor = _document.Actors.SingleOrDefault(candidate => candidate.ActorId == actorId)
+            ?? throw new ArgumentException($"Actor '{actorId}' does not exist.", nameof(actorId));
+        return new ActorDisplayInfo(actor.ActorId, actor.DisplayName, actor.Role);
+    }
 
     public void SelectActor(string? actorId)
     {
@@ -188,9 +203,9 @@ public sealed class DocumentSession
         {
             return command.Execute(_document);
         }
-        catch (Exception) when (_document.Revision > revisionBefore)
+        catch (Exception exception) when (_document.Revision > revisionBefore)
         {
-            onMutationException();
+            CompleteMutationExceptionTransition(exception, onMutationException);
             throw;
         }
         catch (ArgumentException)
@@ -209,9 +224,9 @@ public sealed class DocumentSession
         {
             return command.Undo(_document);
         }
-        catch (Exception) when (_document.Revision > revisionBefore)
+        catch (Exception exception) when (_document.Revision > revisionBefore)
         {
-            onMutationException();
+            CompleteMutationExceptionTransition(exception, onMutationException);
             throw;
         }
         catch (ArgumentException)
@@ -228,19 +243,39 @@ public sealed class DocumentSession
     {
         _undoStack.Push(command);
         _redoStack.Clear();
+        RaiseHistoryChanged();
     }
 
     private void MoveUndoToRedo(ISceneEditCommand command)
     {
         _undoStack.Pop();
         _redoStack.Push(command);
+        RaiseHistoryChanged();
     }
 
     private void MoveRedoToUndo(ISceneEditCommand command)
     {
         _redoStack.Pop();
         _undoStack.Push(command);
+        RaiseHistoryChanged();
     }
+
+    private static void CompleteMutationExceptionTransition(Exception originalException, Action transition)
+    {
+        try
+        {
+            transition();
+        }
+        catch (Exception transitionException)
+        {
+            throw new AggregateException(
+                "The document mutation and history transition observers both failed.",
+                originalException,
+                transitionException);
+        }
+    }
+
+    private void RaiseHistoryChanged() => HistoryChanged?.Invoke(this, EventArgs.Empty);
 
     private void ClearPreview()
     {

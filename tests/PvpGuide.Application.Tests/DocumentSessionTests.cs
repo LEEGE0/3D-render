@@ -11,6 +11,69 @@ namespace PvpGuide.Application.Tests;
 public sealed class DocumentSessionTests
 {
     [Fact]
+    public void Actor_display_info_exposes_immutable_name_and_role_without_exposing_actor_tracks()
+    {
+        var session = CreateSession(out _);
+
+        var actors = session.ActorDisplayInfos;
+
+        Assert.Equal(2, actors.Count);
+        Assert.Equal(new ActorDisplayInfo("host", "Host", "Hero"), actors[0]);
+        Assert.Equal(new ActorDisplayInfo("target", "Target", "Enemy"), session.GetActorDisplayInfo("target"));
+        Assert.Throws<ArgumentException>(() => session.GetActorDisplayInfo("missing"));
+        Assert.Throws<NotSupportedException>(() => ((IList<ActorDisplayInfo>)actors)[0] = actors[1]);
+    }
+
+    [Fact]
+    public void History_changed_observes_final_stack_state_after_move_undo_and_redo()
+    {
+        var session = CreateSession(out _);
+        var states = new List<(bool CanUndo, bool CanRedo)>();
+        session.HistoryChanged += (_, _) => states.Add((session.CanUndo, session.CanRedo));
+        session.SelectActor("host");
+
+        Assert.True(session.MoveSelectedActor(new Position3(5, 2, 7)));
+        Assert.True(session.Undo());
+        Assert.True(session.Redo());
+
+        Assert.Equal([(true, false), (false, true), (true, false)], states);
+    }
+
+    [Fact]
+    public void History_changed_is_silent_for_no_op_and_pre_mutation_failure()
+    {
+        var session = CreateSession(out _);
+        var eventCount = 0;
+        session.HistoryChanged += (_, _) => eventCount++;
+        session.SelectActor("host");
+        var current = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+
+        Assert.False(session.SetSelectedActorTransform(current.Position, current.YawDegrees + 360));
+        Assert.False(session.ExecuteCommand(new ReplaceTransformCommand(
+            "host",
+            new TransformKeyframe(current.Id, current.TimeSeconds, new Position3(99, 2, 3), current.YawDegrees),
+            new TransformKeyframe(current.Id, current.TimeSeconds, new Position3(5, 2, 7), 90))));
+
+        Assert.Equal(0, eventCount);
+        Assert.False(session.CanUndo);
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void History_changed_observes_transition_when_document_observer_throws_after_mutation()
+    {
+        var session = CreateSession(out var document);
+        var states = new List<(bool CanUndo, bool CanRedo)>();
+        session.HistoryChanged += (_, _) => states.Add((session.CanUndo, session.CanRedo));
+        session.SelectActor("host");
+        document.Changed += (_, _) => throw new ChangedObserverException();
+
+        Assert.Throws<ChangedObserverException>(() => session.MoveSelectedActor(new Position3(5, 2, 7)));
+
+        Assert.Equal([(true, false)], states);
+    }
+
+    [Fact]
     public void Move_undo_redo_changes_only_the_first_transform_and_keeps_revision_monotonic()
     {
         var session = CreateSession(out var document);

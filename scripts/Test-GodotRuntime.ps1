@@ -35,12 +35,12 @@ function Invoke-GodotStep {
         throw "$Name 단계가 종료 코드 $exitCode`(으`)로 실패했습니다."
     }
 
-    if ($output -match '(?im)^\s*(ERROR:|SCRIPT ERROR:)|Build FAILED|error CS\d+') {
+    if ($output -match '(?im)^\s*(ERROR:|SCRIPT ERROR:)|WARNING: Missing \.uid|Build FAILED|error CS\d+') {
         throw "$Name 단계 출력에서 오류를 발견했습니다."
     }
 
     foreach ($requiredMarker in $RequiredOutput) {
-        if ($output -notmatch [regex]::Escape($requiredMarker)) {
+        if ($output -notmatch ('(?m)^' + [regex]::Escape($requiredMarker) + '\r?$')) {
             throw "$Name 단계 출력에 필수 표식 '$requiredMarker'이 없습니다."
         }
     }
@@ -66,7 +66,9 @@ Invoke-GodotStep -Name '메인 장면 실행' -Arguments @(
     '--quit-after', '2'
 ) -RequiredOutput @(
     'PROJECT_RUNTIME_READY',
-    'PROJECTION_SYNC_READY revision=1 top=1 world=1'
+    'PROJECTION_SYNC_READY revision=1 top=1 world=1',
+    'BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 stale_error_clear=1 inspector_apply_noop=1 collision_nodes=1 final_ui_clean=1',
+    'BASIC_EDITING_READY revision=4 selected=runtime-actor moved=1 undo=1 redo=1 top=4 world=4 actors=1'
 )
 
 Write-Output 'GODOT_RUNTIME_VERIFICATION=PASS'

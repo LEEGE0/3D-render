@@ -2,7 +2,7 @@
 
 Windows 11에서 오프라인으로 실행되는 DARK SOULS REMASTERED PvP 상황 재현·교육 영상 제작 프로그램이다. 일반적인 3D 제작 도구보다 전투 참여자의 위치, 방향, 거리, 타이밍, 락온, 공격과 뒤잡 관계를 빠르고 정확하게 설명하는 데 초점을 둔다.
 
-현재 저장소에는 실행 가능한 Godot 프로젝트 골격, `SceneDocument` 기반 동시 뷰 동기화, 버전형 저장·가이드 가져오기·렌더 큐 기반이 구현되어 있다. 실제 게임 자산 가져오기와 완성된 편집 UI·최종 렌더 파이프라인은 후속 마일스톤에서 다룬다.
+현재 저장소에는 실행 가능한 Godot 프로젝트 골격, `SceneDocument` 기반 동시 뷰 동기화, 탑뷰 기본 편집, 3D 플레이스홀더, 숫자 Inspector, Undo/Redo, 버전형 저장·가이드 가져오기·렌더 큐 기반이 구현되어 있다. 실제 게임 자산 연결, 타임라인과 최종 렌더 파이프라인은 후속 마일스톤에서 다룬다.
 
 ## 핵심 목표
 
@@ -43,6 +43,53 @@ Godot을 선택한 이유는 오프라인 배포가 단순하고, 2D UI·3D 장�
 ```
 
 `SceneDocument`가 유일한 원본 상태다. 탑뷰와 3D 뷰는 서로의 상태를 직접 복사하지 않고 문서를 읽어 그린다. 이동, 회전, 키프레임 추가, 락온 변경은 모두 명령으로 수행해 Undo/Redo와 저장 상태 추적을 일관되게 유지한다.
+
+## 현재 사용할 수 있는 기본 편집
+
+Godot 메인 장면을 실행하면 왼쪽 위 탑뷰, 오른쪽 위 3D 뷰, 아래쪽 타임라인 자리와 Inspector가 동시에 열린다. 현재 기본 편집 흐름은 다음과 같다.
+
+- 탑뷰의 배우 몸체를 클릭하면 배우를 선택한다. 각 표식은 Application의 불변 `ActorDisplayInfo`에서 받은 표시 이름과 `역할: ...` 텍스트를 함께 보여주며, 적대 역할은 마름모 몸체로 구분한다. 빈 공간을 클릭하면 선택을 해제한다.
+- 선택한 배우 몸체를 3px 이상 끌면 X/Z 위치 미리보기가 시작된다. 이동 중 Y와 Yaw는 보존된다.
+- 배우 앞쪽의 원형 방향 핸들을 끌면 위치를 보존한 채 Yaw를 회전한다. 0°는 +X(화면 오른쪽), 90°는 +Z(화면 아래쪽)다.
+- 드래그 중 변화는 탑뷰와 3D에 동시에 보이지만 문서와 Undo 기록에는 아직 저장되지 않는다. 마우스를 놓을 때 명령 하나로 확정되며 `Escape`는 미리보기를 취소한다.
+- Inspector의 X/Y/Z/Yaw 값을 바꾸면 같은 비영구 미리보기가 표시된다. `변환 적용` 버튼 또는 SpinBox의 Enter 제출로 한 번에 확정한다.
+- `실행 취소`와 `다시 실행` 버튼은 활성 미리보기를 먼저 취소한 뒤 확정된 변환 명령을 되돌리거나 다시 적용한다.
+- X/Z ±1000, Y ±100 범위 밖 숫자는 입력칸에서 먼저 받아 오류를 설명하지만 preview나 문서 변경을 시작하지 않는다. 이미 유효한 숫자로 preview 중이었다면 범위 오류 순간 두 뷰를 committed 상태로 복원하되 잘못 입력한 값과 ErrorLabel은 보존한다. 범위를 바로 clamp해 잘못된 입력을 정상값처럼 확정하지 않는다.
+- 3D 뷰는 actor ID별 기본 Capsule/Box 플레이스홀더를 재사용하고 로컬 +X 방향 표식을 표시한다. 실제 게임 모델이나 애니메이션이 없어도 편집 흐름을 확인할 수 있다.
+
+타임라인이 아직 없으므로 편집 대상은 배우의 시간상 가장 이른 변환 키프레임(`TransformKeyframes[0]`)이다. 가져온 장면의 최초 키프레임 시간이 0초가 아니어도 임의의 0초 키프레임을 만들지 않는다. 키프레임 추가·삭제·임의 시점 편집은 다음 타임라인 마일스톤에서 구현한다.
+
+### 기본 편집 실행과 검증
+
+저장소 루트에서 메인 장면을 실행한다.
+
+```powershell
+& 'D:\3D-render\tools\godot\4.7.2\Godot_v4.7.2-stable_mono_win64\Godot_v4.7.2-stable_mono_win64_console.exe' --path .\src\PvpGuide.Editor --scene res://Scenes/Main/Main.tscn
+```
+
+전체 자동 검증은 Windows 공유 `obj` 파일 잠금을 피하도록 반드시 다음 순서대로 직렬 실행한다.
+
+```powershell
+$env:NUGET_PACKAGES='D:\3D-render\tools\nuget-packages'
+dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Application.Tests\PvpGuide.Application.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Infrastructure.Tests\PvpGuide.Infrastructure.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo
+& .\scripts\Test-ProjectSkeleton.ps1
+& .\scripts\Test-GodotRuntime.ps1
+```
+
+런타임 검증은 기존 준비·동시 투영 표식과 함께 다음 기본 편집 표식을 정확히 요구한다.
+
+```text
+BASIC_EDITING_READY revision=4 selected=runtime-actor moved=1 undo=1 redo=1 top=4 world=4 actors=1
+```
+
+이 표식 전에는 탑뷰 회전 preview와 Escape 복원, 3px 이상 body drag 확정, 실제 Undo/Redo 버튼, Inspector 범위 거부와 no-op Apply를 통과해야만 출력되는 다음 통합 표식이 있어야 한다.
+
+```text
+BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 inspector_apply_noop=1 collision_nodes=1
+```
 
 ## 기준 좌표와 뒤잡 규칙
 
@@ -116,7 +163,8 @@ Task 4의 Domain은 Godot 타입에 의존하지 않는 `SceneDocument`를 단�
 - 성공한 배우·키프레임 추가는 revision을 정확히 1 올리고 변경 이벤트를 정확히 한 번 발생시킨다. 실패한 변경은 revision·이벤트·기존 데이터를 바꾸지 않는다. 선택 배우·현재 시간·활성 도구 등 세션 상태와 Godot `Node`·`Vector*`·`Resource`는 Domain에 넣지 않는다.
 - `CreateSnapshot(timeSeconds)`는 문서 ID, revision, 평가 시간과 배우별 평가 변환을 불변·방어 복사 형태의 `SceneSnapshot`으로 반환한다.
 - `ISceneProjectionConsumer.Apply(SceneSnapshot)`은 Godot 타입이 없는 포트다. `SceneProjectionController`는 하나의 snapshot source와 서로 다른 top/world consumer를 주입받고, 문서 변경 event 1회당 snapshot을 한 번만 만들어 동일 인스턴스를 두 소비자에게 각각 한 번 전달한다. 같은 revision 이벤트는 중복 전달하지 않으며 Dispose 이후에는 전달하지 않는다.
-- 기존 Main 장면은 실제 Domain 문서와 두 Panel 소비자를 조립해 변경 1회 뒤 `PROJECTION_SYNC_READY revision=1 top=1 world=1`을 출력하고, controller는 `_ExitTree`에서 해제한다.
+- Main 장면은 `TopViewSurface`와 `WorldViewProjectionAdapter`를 실제 소비자로 조립한다. 초기 투영 뒤 `PROJECTION_SYNC_READY revision=1 top=1 world=1`, Move→Undo→Redo 뒤 `BASIC_EDITING_READY revision=4 selected=runtime-actor moved=1 undo=1 redo=1 top=4 world=4 actors=1`을 출력한다.
+- committed/preview 투영 조정자, Inspector와 탑뷰 선택 event 구독은 `_ExitTree`에서 모두 해제한다.
 
 Domain과 Editor의 계약을 함께 검증할 때 저장소 루트(`D:\3D-render`)에서 다음 명령을 실행한다.
 
@@ -189,7 +237,9 @@ dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug 
 - 게임 원본/추출 자산 및 도구 Git 제외
 - DSR 플레이어 애니메이션 번들 존재와 일부 추출 확인
 - 전체 아키텍처와 단계별 구현 계획 문서화
-- 다음 구현 단위: Godot .NET 프로젝트 골격과 자동 검증 환경
+- Godot .NET 프로젝트 골격과 Domain/Application/Infrastructure 계층 구현
+- 탑뷰 선택·이동·회전, 동일 미리보기의 3D 투영, 숫자 Inspector와 Undo/Redo 구현
+- 다음 구현 단위: 타임라인 스크럽·재생과 임의 시점 키프레임 편집
 
 ## 법적·운영 주의
 

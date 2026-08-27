@@ -422,11 +422,18 @@
 ### Task 4: Godot 탑뷰 입력·3D 플레이스홀더·Inspector 조립
 
 **Files:**
+- Create: `src/PvpGuide.Application/Sessions/ActorDisplayInfo.cs`
+- Modify: `src/PvpGuide.Application/Sessions/DocumentSession.cs`
+- Modify: `tests/PvpGuide.Application.Tests/DocumentSessionTests.cs`
 - Create: `src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs`
 - Create: `src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs.uid`
+- Create: `src/PvpGuide.Editor/Features/TopView/TopViewCoordinateMapper.cs.uid`
 - Create: `src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs`
+- Create: `src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs.uid`
 - Create: `src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs`
+- Create: `src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs.uid`
 - Create: `src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs`
+- Create: `src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs.uid`
 - Modify: `src/PvpGuide.Editor/Scenes/Main/Main.tscn`
 - Modify: `src/PvpGuide.Editor/Scenes/Main/Main.cs`
 - Create: `tests/PvpGuide.Editor.Tests/WorldTransformMapperTests.cs`
@@ -441,9 +448,9 @@
 - Consumes: `DocumentSession`, committed `SceneSnapshot`, `TransformPreview?`, `TopViewCoordinateMapper`
 - Produces: mouse selection/move/rotate, same-preview top/world rendering, actor-ID keyed Godot placeholders, numeric transform commit, exact runtime marker
 
-- [ ] **Step 1: 3D transform 변환 RED 테스트를 작성한다**
+- [x] **Step 1: 3D transform 변환 RED 테스트를 작성한다**
 
-  `WorldTransformMapperTests`는 Domain pose를 Godot position/rotation 값으로 바꾸는 순수 계산을 검사한다.
+  `WorldTransformMapperTests`는 Domain pose를 Godot 타입 없는 double 기반 `WorldPosition`과 Y rotation radians로 바꾸는 순수 계산을 검사한다. `WorldViewProjectionAdapter`만 이 값을 Godot `Vector3`로 변환한다.
 
   ```csharp
   [Theory]
@@ -453,15 +460,15 @@
   [InlineData(270, -Math.PI * 3 / 2)]
   public void Domain_yaw_maps_to_negative_godot_y_rotation(double yaw, double radians)
   {
-      Assert.Equal(radians, WorldTransformMapper.ToGodotRotationY(yaw), 10);
+      Assert.Equal(radians, WorldTransformMapper.ToRotationYRadians(yaw), 10);
   }
   ```
 
   Position3 X/Y/Z가 보존되고 non-finite 입력이 Domain에서 이미 거부됨을 확인한다.
 
-- [ ] **Step 2: TopViewSurface의 그리기와 입력을 구현한다**
+- [x] **Step 2: TopViewSurface의 그리기와 입력을 구현한다**
 
-  `TopViewSurface : Control, ISceneProjectionConsumer, ITransformPreviewConsumer`는 latest snapshot, preview, selected actor ID를 보관하고 `_Draw()`에서 grid·actor body·이름·방향 handle을 그린다. 색뿐 아니라 역할 텍스트/모양을 함께 표시한다.
+  `TopViewSurface : Control, ISceneProjectionConsumer, ITransformPreviewConsumer`는 latest snapshot, preview, selected actor ID를 보관하고 `_Draw()`에서 grid·actor body·이름·방향 handle을 그린다. Application의 불변 `ActorDisplayInfo` 조회로 DisplayName과 `역할: Role`을 표시하며, 적대 역할은 마름모·나머지는 원을 사용한다. 28px 원형 handle은 selected actor에만 그려 hit-test와 일치시킨다.
 
   `_GuiInput()` 규칙은 다음과 같다.
 
@@ -474,19 +481,19 @@
 
   surface가 committed snapshot과 preview consumer 포트를 직접 구현한다. SceneDocument를 surface에 주입하거나 직접 수정해서는 안 된다.
 
-- [ ] **Step 3: WorldViewProjectionAdapter를 actor ID keyed로 구현한다**
+- [x] **Step 3: WorldViewProjectionAdapter를 actor ID keyed로 구현한다**
 
-  adapter는 `Actors : Node3D` 아래 `Actor_<sanitized-id>` root를 생성·재사용한다. root에 position과 `WorldTransformMapper.ToGodotRotationY`를 적용한다. `VisualRoot` 아래 기본 Capsule/Box body와 로컬 +X facing marker를 만들고 `OverlayRoot`를 분리한다.
+  adapter는 `Actors : Node3D` 아래 `Actor_<sanitized-id>` root를 생성·재사용한다. sanitize collision의 첫 actor는 exact base 이름을 유지하고 다음 actor에는 원본 ID 기반 결정적 suffix를 붙인다. root에 순수 `WorldTransformMapper` 결과를 Godot `Vector3`로 바꿔 적용한다. `VisualRoot` 아래 기본 Capsule/Box body와 로컬 +X facing marker를 만들고 `OverlayRoot`를 분리한다.
 
   snapshot에 사라진 actor ID는 해당 adapter 소유 노드만 `QueueFree()`하고 dictionary에서 제거한다. preview는 대상 actor root의 표시 transform만 임시로 덮어쓰며 preview clear 시 latest committed snapshot 값을 복원한다. 다른 Godot node 상태를 문서 원본으로 읽지 않는다.
 
-- [ ] **Step 4: Inspector 컨트롤러와 장면 노드를 구현한다**
+- [x] **Step 4: Inspector 컨트롤러와 장면 노드를 구현한다**
 
   `Main.tscn`에 설계 문서의 `TopViewSurface`, `WorldViewportContainer/WorldViewport/WorldRoot/Camera3D/DirectionalLight3D/Ground/Actors`, Inspector label·SpinBox 4개·Apply/Undo/Redo button을 정확한 이름으로 추가한다.
 
-  `TransformInspectorController`는 selection event와 committed/preview 값을 입력에 반영한다. X/Z 범위 ±1000, Y ±100, step 0.1, Yaw 입력은 확정 시 `[0,360)`로 정규화한다. 내부 반영 중 `ValueChanged` 재진입을 막는 guard를 두고, 사용자 값 변경은 preview를 시작·갱신한다. Apply 버튼 또는 각 SpinBox 내부 LineEdit의 Enter 제출은 preview를 명령 하나로 확정한다. Undo/Redo는 활성 preview를 취소한 뒤 session 메서드를 호출한다. 선택 없음·stale actor·범위 오류는 ErrorLabel에 한글로 표시하고 문서를 바꾸지 않는다.
+  `TransformInspectorController`는 selection event와 committed/preview 값을 입력에 반영한다. X/Z 범위 ±1000, Y ±100, step 0.1, Yaw 입력은 확정 시 `[0,360)`로 정규화한다. SpinBox는 범위 밖 text/value를 받아 controller가 오류를 표시하고 preview/commit 전에 거부하게 한다. valid preview 뒤 invalid 값이 들어오면 guarded preview clear로 두 뷰를 committed 상태로 복원하되 invalid SpinBox 값과 ErrorLabel은 보존하며, invalid Apply/Enter는 preview를 다시 만들지 않는다. 내부 반영 중 `ValueChanged` 재진입을 막는 guard를 두고, 사용자 값 변경은 preview를 시작·갱신한다. Apply 버튼 또는 각 SpinBox 내부 LineEdit의 Enter 제출은 preview를 명령 하나로 확정한다. Undo/Redo는 활성 preview를 취소한 뒤 session 메서드를 호출한다. `DocumentSession.HistoryChanged`는 성공한 stack transition 뒤에만 발생하며 Inspector는 이 event에서 버튼 상태를 갱신한다. 선택 없음·stale actor·범위 오류는 ErrorLabel에 한글로 표시하고 문서를 바꾸지 않는다.
 
-- [ ] **Step 5: Main 조립과 exact runtime smoke를 구현한다**
+- [x] **Step 5: Main 조립과 exact runtime smoke를 구현한다**
 
   `_Ready()` 순서를 고정한다.
 
@@ -495,8 +502,14 @@
   3. `DocumentSession`, top/world adapter, committed/preview controller, Inspector를 조립한다.
   4. `ProjectCurrent()`로 top/world count 1과 actor count 1을 만든다.
   5. 기존 marker `PROJECTION_SYNC_READY revision=1 top=1 world=1`을 출력한다.
-  6. actor 선택, Move, Undo, Redo를 실행해 revision 4와 top/world count 4를 만든다.
-  7. 다음 exact marker를 출력한다.
+  6. actor root/VisualRoot/OverlayRoot와 committed transform을 확인한다.
+  7. 실제 `_GuiInput` 회전 preview와 Escape 복원, body drag/release 이동 확정, Undo/Redo button signal, Inspector valid preview→X=1001 취소·invalid Apply·no-op Apply를 실행해 revision 4와 top/world count 4를 만든다.
+  8. 별도 임시 Node3D/adapter/synthetic snapshot으로 sanitize collision actor 두 개의 실제 child 이름이 distinct/stable인지 확인하고 임시 root만 해제한다.
+  9. 통합 assertion 성공 marker 뒤 다음 exact marker를 출력한다.
+
+  ```text
+  BASIC_EDITING_INTEGRATION_READY rotation_preview=1 escape_restore=1 drag_commit=1 undo_button=1 redo_button=1 inspector_reject=1 invalid_preview_cancel=1 inspector_apply_noop=1 collision_nodes=1
+  ```
 
   ```text
   BASIC_EDITING_READY revision=4 selected=runtime-actor moved=1 undo=1 redo=1 top=4 world=4 actors=1
@@ -504,13 +517,13 @@
 
   `_ExitTree()`는 committed/preview controller와 Inspector event 구독을 모두 해제한다.
 
-- [ ] **Step 6: 구조·런타임 스크립트와 문서를 갱신한다**
+- [x] **Step 6: 구조·런타임 스크립트와 문서를 갱신한다**
 
-  `Test-ProjectSkeleton.ps1`은 새 `.cs/.uid`, Application 참조, scene node 이름을 검사한다. `Test-GodotRuntime.ps1`은 기존 marker와 exact BASIC marker를 모두 요구한다.
+  `Test-ProjectSkeleton.ps1`은 새 `.cs/.uid`, Application 표시 계약, Application 참조, scene node 이름을 검사한다. `Test-GodotRuntime.ps1`은 기존 marker와 exact integration/BASIC marker를 모두 요구한다.
 
   README에 사용 가능한 탑뷰 선택·이동·회전·Inspector·Undo/Redo, 현재 first-keyframe 정책, 실행/검증 명령을 한글로 기록한다. `docs/05-editor-architecture.md`는 최초 구현 계약을 반영하고 `docs/13-roadmap.md` 단계 2에서 이번에 완료된 항목과 후속 항목을 구분한다.
 
-- [ ] **Step 7: 모든 자동 검증을 메인에서 직렬 실행한다**
+- [x] **Step 7: 모든 자동 검증을 메인에서 직렬 실행한다**
 
   Run:
 
@@ -524,18 +537,18 @@
   & .\scripts\Test-GodotRuntime.ps1
   ```
 
-  Expected: 모든 테스트 실패 0, 구조 PASS, 기존 두 marker와 BASIC marker, `GODOT_RUNTIME_VERIFICATION=PASS`.
+  Expected: 모든 테스트 실패 0, 구조 PASS, 기존 두 marker와 integration/BASIC marker, `GODOT_RUNTIME_VERIFICATION=PASS`.
 
-- [ ] **Step 8: 실제 Forward+ GUI와 시각 상태를 확인한다**
+- [x] **Step 8: 실제 Forward+ GUI와 시각 상태를 확인한다**
 
   Godot console executable로 headless 없이 Main scene을 2초 실행한다. 출력에 RTX 5060의 `Vulkan ... Forward+`, 기존 marker와 BASIC marker가 있고 `ERROR:`가 없어야 한다. 화면에서 탑뷰 actor·방향 표시, 3D ground·placeholder, Inspector 입력이 동시에 보이는지 스크린샷으로 확인한다.
 
-- [ ] **Step 9: fresh 리뷰 후 메인이 Task 4를 커밋·푸시한다**
+- [x] **Step 9: fresh 리뷰 후 메인이 Task 4를 커밋·푸시한다**
 
   spec reviewer는 좌표·first-key 정책·preview 비영구성·Undo/Redo·exact marker·게임패드 제외를 확인하고, quality reviewer는 Godot lifecycle, event dispose, node ownership, stale preview, 테스트 결함 탐지력을 확인한다. 모든 Critical/Important 수정과 fresh 재리뷰 후 Task 4 경로만 정확히 스테이징한다.
 
   ```powershell
-  git add -- 'src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs.uid' 'src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs' 'src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs' 'src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs' 'src/PvpGuide.Editor/Scenes/Main/Main.tscn' 'src/PvpGuide.Editor/Scenes/Main/Main.cs' 'tests/PvpGuide.Editor.Tests/WorldTransformMapperTests.cs' 'scripts/Test-ProjectSkeleton.ps1' 'scripts/Test-GodotRuntime.ps1' 'README.md' 'docs/05-editor-architecture.md' 'docs/13-roadmap.md' 'docs/superpowers/plans/2026-08-27-basic-topview-editing.md'
+  git add -- 'src/PvpGuide.Application/Sessions/ActorDisplayInfo.cs' 'src/PvpGuide.Application/Sessions/DocumentSession.cs' 'tests/PvpGuide.Application.Tests/DocumentSessionTests.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs' 'src/PvpGuide.Editor/Features/TopView/TopViewSurface.cs.uid' 'src/PvpGuide.Editor/Features/TopView/TopViewCoordinateMapper.cs.uid' 'src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs' 'src/PvpGuide.Editor/Features/ViewportSync/WorldViewProjectionAdapter.cs.uid' 'src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs' 'src/PvpGuide.Editor/Features/ViewportSync/WorldTransformMapper.cs.uid' 'src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs' 'src/PvpGuide.Editor/Features/Inspector/TransformInspectorController.cs.uid' 'src/PvpGuide.Editor/Scenes/Main/Main.tscn' 'src/PvpGuide.Editor/Scenes/Main/Main.cs' 'tests/PvpGuide.Editor.Tests/WorldTransformMapperTests.cs' 'scripts/Test-ProjectSkeleton.ps1' 'scripts/Test-GodotRuntime.ps1' 'README.md' 'docs/05-editor-architecture.md' 'docs/13-roadmap.md' 'docs/superpowers/plans/2026-08-27-basic-topview-editing.md'
   git commit -m 'feat: 탑뷰 편집과 3D 플레이스홀더 연결'
   git push
   ```

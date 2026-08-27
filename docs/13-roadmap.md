@@ -36,18 +36,32 @@ Windows 11에서 오프라인으로 메인 창이 열리고 헤드리스 검증�
 
 ## 단계 2 — 장면 문서와 기본 편집
 
-### 작업
+### 이번 마일스톤에서 완료
 
-- `SceneDocument`, 배우와 변환 키프레임
-- 좌표·각도 보간
-- 문서 세션과 명령 기반 Undo/Redo
-- 탑뷰 배우 선택·이동·회전
-- 3D 플레이스홀더와 동시 갱신
-- 속성 숫자 입력
+- [x] `SceneDocument`, 배우와 변환 키프레임 및 원자적 최초 키프레임 교체
+- [x] 위치 선형 보간과 0/360 경계 최단 Yaw 보간
+- [x] `DocumentSession` 선택·비영구 preview·명령 기반 Undo/Redo
+- [x] 탑뷰 단일 배우 선택·빈 공간 해제·X/Z 이동·Yaw 방향 핸들 회전
+- [x] 동일 committed snapshot과 preview를 사용하는 3D actor-ID 플레이스홀더
+- [x] X/Y/Z/Yaw 숫자 preview와 Apply/Enter 확정
+- [x] 불변 `ActorDisplayInfo`를 통한 표시 이름·역할 텍스트와 적대 역할 마름모 표식
+- [x] stack 전환 후 `HistoryChanged` 기반 Inspector Undo/Redo 버튼 상태 동기화
+- [x] 탑뷰 실제 입력·Escape·버튼·Inspector 범위 거부를 포함한 Godot 런타임 통합 검사
+- [x] valid Inspector preview 뒤 invalid 입력의 committed 복원·invalid 값 보존 검사
+- [x] Godot-free double transform mapper와 실제 actor node-name collision 통합 검사
+- [x] 네 테스트 프로젝트, 구조 검사와 Godot 헤드리스 런타임 표식
+
+### 단계 2 후속 정리
+
+- 탑뷰 팬·줌·스냅과 겹친 actor 선택 보조
+- 3D 직접 피킹과 축 기즈모
+- 키보드 단축키와 패널 상태 저장
+
+시간 스크럽, 임의 시점 키프레임 생성·이동·삭제는 단계 3에서 구현한다. 현재 편집은 원본 시간 구조를 조용히 바꾸지 않도록 각 배우의 시간상 최초 변환 키프레임만 대상으로 한다.
 
 ### 완료 기준
 
-두 뷰의 편집 결과가 항상 같은 문서 상태를 반영하고 저장 없이 Undo/Redo 검증이 가능하다.
+탑뷰 이동·회전 또는 Inspector 확정 결과가 같은 `SceneDocument`와 3D 표현에 반영되고, 저장 없이 Move→Undo→Redo를 검증할 수 있다. 드래그 중 preview는 두 뷰에만 적용되며 문서 revision을 올리지 않는다.
 
 ## 단계 3 — 타임라인과 락온
 

@@ -1,6 +1,15 @@
-[gd_scene load_steps=2 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" path="res://Scenes/Main/Main.cs" id="1_main"]
+[ext_resource type="Script" path="res://Features/TopView/TopViewSurface.cs" id="2_topview"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ground"]
+albedo_color = Color(0.12, 0.16, 0.21, 1)
+roughness = 0.9
+
+[sub_resource type="PlaneMesh" id="PlaneMesh_ground"]
+material = SubResource("StandardMaterial3D_ground")
+size = Vector2(20, 20)
 
 [node name="Main" type="Control"]
 layout_mode = 3
@@ -16,11 +25,50 @@ layout_mode = 0
 offset_right = 640.0
 offset_bottom = 360.0
 
+[node name="TopViewSurface" type="Control" parent="TopViewPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 0
+script = ExtResource("2_topview")
+
 [node name="WorldViewPanel" type="Panel" parent="."]
 layout_mode = 0
 offset_left = 640.0
 offset_right = 1280.0
 offset_bottom = 360.0
+
+[node name="WorldViewportContainer" type="SubViewportContainer" parent="WorldViewPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+stretch = true
+
+[node name="WorldViewport" type="SubViewport" parent="WorldViewPanel/WorldViewportContainer"]
+handle_input_locally = false
+size = Vector2i(640, 360)
+render_target_update_mode = 4
+
+[node name="WorldRoot" type="Node3D" parent="WorldViewPanel/WorldViewportContainer/WorldViewport"]
+
+[node name="Camera3D" type="Camera3D" parent="WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot"]
+transform = Transform3D(0.707107, -0.40558, 0.579228, 0, 0.819152, 0.573576, -0.707107, -0.40558, 0.579228, 6, 7, 6)
+current = true
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot"]
+rotation_degrees = Vector3(-55, -35, 0)
+shadow_enabled = true
+
+[node name="Ground" type="MeshInstance3D" parent="WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot"]
+mesh = SubResource("PlaneMesh_ground")
+
+[node name="Actors" type="Node3D" parent="WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot"]
 
 [node name="TimelinePanel" type="Panel" parent="."]
 layout_mode = 0
@@ -28,9 +76,75 @@ offset_top = 360.0
 offset_right = 960.0
 offset_bottom = 720.0
 
+[node name="TimelineStatus" type="Label" parent="TimelinePanel"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 720.0
+offset_bottom = 48.0
+text = "타임라인은 다음 마일스톤에서 구현됩니다. 현재는 최초 변환 키프레임을 편집합니다."
+
 [node name="InspectorPanel" type="Panel" parent="."]
 layout_mode = 0
 offset_left = 960.0
 offset_top = 360.0
 offset_right = 1280.0
 offset_bottom = 720.0
+
+[node name="TransformInspector" type="VBoxContainer" parent="InspectorPanel"]
+layout_mode = 0
+offset_left = 16.0
+offset_top = 16.0
+offset_right = 304.0
+offset_bottom = 344.0
+theme_override_constants/separation = 8
+
+[node name="SelectedActorLabel" type="Label" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+text = "선택된 배우: 없음"
+
+[node name="XInput" type="SpinBox" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+min_value = -1000.0
+max_value = 1000.0
+step = 0.1
+prefix = "X: "
+
+[node name="YInput" type="SpinBox" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+min_value = -100.0
+max_value = 100.0
+step = 0.1
+prefix = "Y: "
+
+[node name="ZInput" type="SpinBox" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+min_value = -1000.0
+max_value = 1000.0
+step = 0.1
+prefix = "Z: "
+
+[node name="YawInput" type="SpinBox" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+min_value = -360000.0
+max_value = 360000.0
+step = 0.1
+prefix = "Yaw: "
+suffix = "°"
+
+[node name="ApplyButton" type="Button" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+text = "변환 적용"
+
+[node name="UndoButton" type="Button" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+text = "실행 취소"
+
+[node name="RedoButton" type="Button" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+text = "다시 실행"
+
+[node name="ErrorLabel" type="Label" parent="InspectorPanel/TransformInspector"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.35, 0.35, 1)
+autowrap_mode = 2

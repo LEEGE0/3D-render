@@ -1,0 +1,434 @@
+using Godot;
+using PvpGuide.Application.Editing;
+using PvpGuide.Application.Projection;
+using PvpGuide.Application.Sessions;
+using PvpGuide.Domain;
+
+namespace PvpGuide.Editor.Features.TopView;
+
+public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransformPreviewConsumer
+{
+    private const double PixelsPerUnit = 40;
+    private const double MoveThresholdPixels = 3;
+    private const float ActorRadiusPixels = 12;
+
+    private readonly Color _gridColor = new("263248");
+    private readonly Color _actorColor = new("55aaff");
+    private readonly Color _selectedColor = new("ffd166");
+    private readonly Color _previewColor = new("7ee787");
+    private DocumentSession? _session;
+    private SceneSnapshot? _latestSnapshot;
+    private TransformPreview? _preview;
+    private string? _selectedActorId;
+    private DragMode _dragMode;
+    private ScreenPoint _pressPoint;
+    private Position3 _dragStartPosition;
+    private double _dragStartYaw;
+    private bool _disposed;
+
+    public int ApplyCount { get; private set; }
+
+    public void Initialize(DocumentSession session)
+    {
+        ArgumentNullException.ThrowIfNull(session);
+        if (_disposed)
+        {
+            throw new ObjectDisposedException(nameof(TopViewSurface), "해제된 탑뷰 편집기는 다시 초기화할 수 없습니다.");
+        }
+
+        if (_session is not null)
+        {
+            throw new InvalidOperationException("탑뷰 편집기는 한 번만 초기화할 수 있습니다.");
+        }
+
+        _session = session;
+        _selectedActorId = session.SelectedActorId;
+        session.SelectionChanged += OnSelectionChanged;
+        FocusExited += OnFocusExited;
+        MouseFilter = MouseFilterEnum.Stop;
+        FocusMode = FocusModeEnum.All;
+        QueueRedraw();
+    }
+
+    public void Apply(SceneSnapshot snapshot)
+    {
+        ArgumentNullException.ThrowIfNull(snapshot);
+        _latestSnapshot = snapshot;
+        ApplyCount++;
+
+        if (_selectedActorId is not null && !snapshot.ActorTransforms.ContainsKey(_selectedActorId))
+        {
+            _session?.SelectActor(null);
+        }
+
+        QueueRedraw();
+    }
+
+    public void ApplyPreview(TransformPreview? preview)
+    {
+        _preview = preview;
+        QueueRedraw();
+    }
+
+    public override void _Draw()
+    {
+        DrawGrid();
+        if (_latestSnapshot is null)
+        {
+            return;
+        }
+
+        var mapper = CreateMapper();
+        foreach (var (actorId, committed) in _latestSnapshot.ActorTransforms)
+        {
+            var transform = GetDisplayedTransform(actorId, committed);
+            var center = ToVector2(mapper.WorldToScreen(transform.Position));
+            var selected = actorId == _selectedActorId;
+            var previewing = _preview?.ActorId == actorId;
+            var bodyColor = previewing ? _previewColor : selected ? _selectedColor : _actorColor;
+            var displayInfo = GetDisplayInfo(actorId);
+            var handle = ToVector2(mapper.RotationHandlePosition(
+                new ScreenPoint(center.X, center.Y),
+                transform.YawDegrees));
+
+            if (UsesHostileBodyShape(displayInfo.Role))
+            {
+                DrawColoredPolygon(
+                    [
+                        center + new Vector2(0, -ActorRadiusPixels),
+                        center + new Vector2(ActorRadiusPixels, 0),
+                        center + new Vector2(0, ActorRadiusPixels),
+                        center + new Vector2(-ActorRadiusPixels, 0),
+                    ],
+                    bodyColor);
+            }
+            else
+            {
+                DrawCircle(center, ActorRadiusPixels, bodyColor);
+            }
+
+            DrawLine(center, handle, bodyColor, 3, true);
+            if (selected)
+            {
+                DrawCircle(handle, 5, bodyColor);
+            }
+
+            DrawString(
+                GetThemeDefaultFont(),
+                center + new Vector2(17, -10),
+                displayInfo.DisplayName,
+                HorizontalAlignment.Left,
+                -1,
+                14,
+                bodyColor);
+            DrawString(
+                GetThemeDefaultFont(),
+                center + new Vector2(17, 8),
+                $"역할: {displayInfo.Role}",
+                HorizontalAlignment.Left,
+                -1,
+                13,
+                bodyColor);
+        }
+    }
+
+    public override void _GuiInput(InputEvent @event)
+    {
+        if (_session is null || _latestSnapshot is null)
+        {
+            return;
+        }
+
+        switch (@event)
+        {
+            case InputEventKey key when key.Pressed && key.Keycode == Key.Escape:
+                CancelDrag();
+                AcceptEvent();
+                break;
+            case InputEventMouseButton button when button.ButtonIndex == MouseButton.Left:
+                if (button.Pressed)
+                {
+                    HandlePress(ToScreenPoint(button.Position));
+                    GrabFocus();
+                }
+                else
+                {
+                    HandleRelease();
+                }
+
+                AcceptEvent();
+                break;
+            case InputEventMouseMotion motion when _dragMode != DragMode.None:
+                if ((motion.ButtonMask & MouseButtonMask.Left) == 0)
+                {
+                    CancelDrag();
+                }
+                else
+                {
+                    HandleMotion(ToScreenPoint(motion.Position));
+                }
+
+                AcceptEvent();
+                break;
+        }
+    }
+
+    public void DetachSession()
+    {
+        if (_disposed)
+        {
+            return;
+        }
+
+        var session = _session;
+        try
+        {
+            session?.CancelPreview();
+        }
+        finally
+        {
+            if (session is not null)
+            {
+                session.SelectionChanged -= OnSelectionChanged;
+            }
+
+            FocusExited -= OnFocusExited;
+            _session = null;
+            _dragMode = DragMode.None;
+            _disposed = true;
+        }
+    }
+
+    private void DrawGrid()
+    {
+        for (var x = 0f; x <= Size.X; x += (float)PixelsPerUnit)
+        {
+            DrawLine(new Vector2(x, 0), new Vector2(x, Size.Y), _gridColor, 1);
+        }
+
+        for (var y = 0f; y <= Size.Y; y += (float)PixelsPerUnit)
+        {
+            DrawLine(new Vector2(0, y), new Vector2(Size.X, y), _gridColor, 1);
+        }
+
+        DrawLine(new Vector2(Size.X / 2, 0), new Vector2(Size.X / 2, Size.Y), new Color("506784"), 2);
+        DrawLine(new Vector2(0, Size.Y / 2), new Vector2(Size.X, Size.Y / 2), new Color("506784"), 2);
+    }
+
+    private void HandlePress(ScreenPoint pointer)
+    {
+        var mapper = CreateMapper();
+        var hit = FindHit(mapper, pointer);
+        if (hit.ActorId is null)
+        {
+            CancelDrag();
+            _session!.SelectActor(null);
+            return;
+        }
+
+        try
+        {
+            _session!.CancelPreview();
+            _session!.SelectActor(hit.ActorId);
+            var selected = _session.GetSelectedTransform()
+                ?? throw new InvalidOperationException("선택한 배우의 변환을 찾을 수 없습니다.");
+            _pressPoint = pointer;
+            _dragStartPosition = selected.Position;
+            _dragStartYaw = selected.YawDegrees;
+            _dragMode = hit.Kind == TopViewHitKind.RotationHandle
+                ? DragMode.Rotate
+                : DragMode.MovePending;
+            if (_dragMode == DragMode.Rotate)
+            {
+                _session.BeginPreview();
+            }
+        }
+        catch (ArgumentException exception)
+        {
+            ReportInputError($"탑뷰 선택을 적용할 수 없습니다: {exception.Message}");
+            ResetDrag();
+        }
+        catch (InvalidOperationException exception)
+        {
+            ReportInputError($"탑뷰 편집을 시작할 수 없습니다: {exception.Message}");
+            ResetDrag();
+        }
+    }
+
+    private void HandleMotion(ScreenPoint pointer)
+    {
+        var mapper = CreateMapper();
+        if (_dragMode == DragMode.MovePending)
+        {
+            var deltaX = pointer.X - _pressPoint.X;
+            var deltaY = pointer.Y - _pressPoint.Y;
+            if ((deltaX * deltaX) + (deltaY * deltaY) < MoveThresholdPixels * MoveThresholdPixels)
+            {
+                return;
+            }
+
+            try
+            {
+                _session!.BeginPreview();
+                _dragMode = DragMode.Move;
+            }
+            catch (InvalidOperationException exception)
+            {
+                ReportInputError($"탑뷰 이동을 시작할 수 없습니다: {exception.Message}");
+                ResetDrag();
+                return;
+            }
+        }
+
+        try
+        {
+            if (_dragMode == DragMode.Move)
+            {
+                var pressedWorld = mapper.ScreenToWorld(_pressPoint, _dragStartPosition.Y);
+                var pointerWorld = mapper.ScreenToWorld(pointer, _dragStartPosition.Y);
+                _session!.UpdatePreview(
+                    new Position3(
+                        _dragStartPosition.X + pointerWorld.X - pressedWorld.X,
+                        _dragStartPosition.Y,
+                        _dragStartPosition.Z + pointerWorld.Z - pressedWorld.Z),
+                    _dragStartYaw);
+            }
+            else if (_dragMode == DragMode.Rotate)
+            {
+                var actorCenter = mapper.WorldToScreen(_dragStartPosition);
+                _session!.UpdatePreview(
+                    _dragStartPosition,
+                    mapper.PointerYawDegrees(pointer, actorCenter));
+            }
+        }
+        catch (ArgumentException exception)
+        {
+            ReportInputError($"탑뷰 미리보기 값이 올바르지 않습니다: {exception.Message}");
+            CancelDrag();
+        }
+        catch (InvalidOperationException exception)
+        {
+            ReportInputError($"탑뷰 미리보기를 갱신할 수 없습니다: {exception.Message}");
+            CancelDrag();
+        }
+    }
+
+    private void HandleRelease()
+    {
+        try
+        {
+            if (_dragMode is DragMode.Move or DragMode.Rotate)
+            {
+                if (!_session!.CommitPreview())
+                {
+                    ReportInputError("탑뷰 변경을 확정하지 못했거나 실제 변경이 없습니다.");
+                }
+            }
+        }
+        finally
+        {
+            ResetDrag();
+        }
+    }
+
+    private (string? ActorId, TopViewHitKind Kind) FindHit(TopViewCoordinateMapper mapper, ScreenPoint pointer)
+    {
+        var snapshot = _latestSnapshot;
+        if (snapshot is null)
+        {
+            return (null, TopViewHitKind.None);
+        }
+
+        if (_selectedActorId is not null &&
+            snapshot.ActorTransforms.TryGetValue(_selectedActorId, out var selectedTransform))
+        {
+            var displayed = GetDisplayedTransform(_selectedActorId, selectedTransform);
+            var center = mapper.WorldToScreen(displayed.Position);
+            var handle = mapper.RotationHandlePosition(center, displayed.YawDegrees);
+            if (mapper.IsRotationHandleHit(pointer, handle))
+            {
+                return (_selectedActorId, TopViewHitKind.RotationHandle);
+            }
+        }
+
+        foreach (var (actorId, committed) in snapshot.ActorTransforms.Reverse())
+        {
+            var center = mapper.WorldToScreen(GetDisplayedTransform(actorId, committed).Position);
+            if (mapper.IsActorBodyHit(pointer, center))
+            {
+                return (actorId, TopViewHitKind.ActorBody);
+            }
+        }
+
+        return (null, TopViewHitKind.None);
+    }
+
+    private EvaluatedTransform GetDisplayedTransform(string actorId, EvaluatedTransform committed) =>
+        _preview is not null && _preview.ActorId == actorId
+            ? new EvaluatedTransform(_preview.Position, _preview.YawDegrees)
+            : committed;
+
+    private TopViewCoordinateMapper CreateMapper() => new(
+        Math.Max(Size.X, 1),
+        Math.Max(Size.Y, 1),
+        centerX: 0,
+        centerZ: 0,
+        PixelsPerUnit);
+
+    private void CancelDrag()
+    {
+        if (_dragMode is DragMode.Move or DragMode.Rotate)
+        {
+            _session?.CancelPreview();
+        }
+
+        ResetDrag();
+    }
+
+    private void ResetDrag() => _dragMode = DragMode.None;
+
+    private void OnSelectionChanged(object? sender, SelectionChangedEventArgs eventArgs)
+    {
+        _selectedActorId = eventArgs.SelectedActorId;
+        ResetDrag();
+        QueueRedraw();
+    }
+
+    private void OnFocusExited() => CancelDrag();
+
+    private ActorDisplayInfo GetDisplayInfo(string actorId)
+    {
+        try
+        {
+            return _session?.GetActorDisplayInfo(actorId)
+                ?? new ActorDisplayInfo(actorId, actorId, "알 수 없음");
+        }
+        catch (ArgumentException)
+        {
+            return new ActorDisplayInfo(actorId, actorId, "알 수 없음");
+        }
+    }
+
+    public static bool UsesHostileBodyShape(string role)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(role);
+        return role.Contains("enemy", StringComparison.OrdinalIgnoreCase) ||
+               role.Contains("invader", StringComparison.OrdinalIgnoreCase) ||
+               role.Contains("target", StringComparison.OrdinalIgnoreCase) ||
+               role.Contains('적');
+    }
+
+    private static ScreenPoint ToScreenPoint(Vector2 position) => new(position.X, position.Y);
+
+    private static Vector2 ToVector2(ScreenPoint point) => new((float)point.X, (float)point.Y);
+
+    private static void ReportInputError(string message) => GD.PushWarning(message);
+
+    private enum DragMode
+    {
+        None,
+        MovePending,
+        Move,
+        Rotate,
+    }
+}

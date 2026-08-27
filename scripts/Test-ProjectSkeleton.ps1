@@ -30,6 +30,7 @@ $requiredFiles = @(
     (Join-Path $applicationRoot 'PvpGuide.Application.csproj'),
     (Join-Path $applicationRoot 'Properties\AssemblyInfo.cs'),
     (Join-Path $applicationRoot 'Sessions\DocumentSession.cs'),
+    (Join-Path $applicationRoot 'Sessions\ActorDisplayInfo.cs'),
     (Join-Path $applicationRoot 'Sessions\SelectionChangedEventArgs.cs'),
     (Join-Path $applicationRoot 'Editing\TransformPreview.cs'),
     (Join-Path $applicationRoot 'Editing\TransformPreviewChangedEventArgs.cs'),
@@ -43,6 +44,15 @@ $requiredFiles = @(
     (Join-Path $infrastructureRoot 'Serialization\SceneDocumentSerializer.cs'),
     (Join-Path $infrastructureRoot 'Import\TopviewGuideV1Importer.cs'),
     (Join-Path $projectRoot 'Features\TopView\TopViewCoordinateMapper.cs'),
+    (Join-Path $projectRoot 'Features\TopView\TopViewCoordinateMapper.cs.uid'),
+    (Join-Path $projectRoot 'Features\TopView\TopViewSurface.cs'),
+    (Join-Path $projectRoot 'Features\TopView\TopViewSurface.cs.uid'),
+    (Join-Path $projectRoot 'Features\ViewportSync\WorldViewProjectionAdapter.cs'),
+    (Join-Path $projectRoot 'Features\ViewportSync\WorldViewProjectionAdapter.cs.uid'),
+    (Join-Path $projectRoot 'Features\ViewportSync\WorldTransformMapper.cs'),
+    (Join-Path $projectRoot 'Features\ViewportSync\WorldTransformMapper.cs.uid'),
+    (Join-Path $projectRoot 'Features\Inspector\TransformInspectorController.cs'),
+    (Join-Path $projectRoot 'Features\Inspector\TransformInspectorController.cs.uid'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs.uid'),
     (Join-Path $sampleRoot 'synthetic-topview-v1.scene.json'),
@@ -58,6 +68,7 @@ $requiredFiles = @(
     (Join-Path $infrastructureTestRoot 'SceneRoundTripTests.cs'),
     (Join-Path $editorTestRoot 'PvpGuide.Editor.Tests.csproj'),
     (Join-Path $editorTestRoot 'TopViewCoordinateMapperTests.cs'),
+    (Join-Path $editorTestRoot 'WorldTransformMapperTests.cs'),
     (Join-Path $editorTestRoot 'RenderQueueTests.cs')
 )
 
@@ -80,6 +91,19 @@ function Assert-Contains {
     }
 }
 
+function Assert-NotContains {
+    param(
+        [string]$Path,
+        [string]$Pattern,
+        [string]$Description
+    )
+
+    $content = Get-Content -LiteralPath $Path -Raw
+    if ($content -match $Pattern) {
+        throw "$Description 검증에 실패했습니다: $Path"
+    }
+}
+
 $projectFile = Join-Path $projectRoot 'project.godot'
 $csprojFile = Join-Path $projectRoot 'PvpGuide.Editor.csproj'
 $sceneFile = Join-Path $projectRoot 'Scenes\Main\Main.tscn'
@@ -88,6 +112,7 @@ $applicationProjectFile = Join-Path $applicationRoot 'PvpGuide.Application.cspro
 $applicationTestProjectFile = Join-Path $applicationTestRoot 'PvpGuide.Application.Tests.csproj'
 $infrastructureProjectFile = Join-Path $infrastructureRoot 'PvpGuide.Infrastructure.csproj'
 $infrastructureTestProjectFile = Join-Path $infrastructureTestRoot 'PvpGuide.Infrastructure.Tests.csproj'
+$worldTransformMapperFile = Join-Path $projectRoot 'Features\ViewportSync\WorldTransformMapper.cs'
 
 Assert-Contains $projectFile 'run/main_scene="res://Scenes/Main/Main\.tscn"' '메인 장면 설정'
 Assert-Contains $projectFile '"C#"' 'C# 기능 설정'
@@ -103,9 +128,33 @@ Assert-Contains $applicationTestProjectFile '\.\./\.\./src/PvpGuide\.Application
 Assert-Contains $infrastructureProjectFile '\.\./PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Infrastructure에서 Domain 프로젝트 참조'
 Assert-Contains $infrastructureTestProjectFile '\.\./\.\./src/PvpGuide\.Infrastructure/PvpGuide\.Infrastructure\.csproj' 'Infrastructure 테스트 프로젝트 참조'
 Assert-Contains $infrastructureTestProjectFile 'synthetic-topview-v1\.scene\.json' '합성 가져오기 fixture 포함'
+Assert-NotContains $worldTransformMapperFile 'Godot|Vector[234]' 'WorldTransformMapper의 Godot 독립성'
 
 foreach ($nodeName in @('TopViewPanel', 'WorldViewPanel', 'TimelinePanel', 'InspectorPanel')) {
     Assert-Contains $sceneFile ([regex]::Escape('name="' + $nodeName + '"')) "장면 노드 $nodeName"
+}
+
+foreach ($nodeName in @(
+    'TopViewSurface',
+    'WorldViewportContainer',
+    'WorldViewport',
+    'WorldRoot',
+    'Camera3D',
+    'DirectionalLight3D',
+    'Ground',
+    'Actors',
+    'TransformInspector',
+    'SelectedActorLabel',
+    'XInput',
+    'YInput',
+    'ZInput',
+    'YawInput',
+    'ApplyButton',
+    'UndoButton',
+    'RedoButton',
+    'ErrorLabel'
+)) {
+    Assert-Contains $sceneFile ([regex]::Escape('name="' + $nodeName + '"')) "기본 편집 장면 노드 $nodeName"
 }
 
 Write-Output 'PROJECT_SKELETON_VERIFICATION=PASS'
