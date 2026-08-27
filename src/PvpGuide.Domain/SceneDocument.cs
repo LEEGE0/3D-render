@@ -161,6 +161,22 @@ public sealed class SceneDocument : ISceneSnapshotSource
     {
         ArgumentNullException.ThrowIfNull(expectedCurrent);
         ArgumentNullException.ThrowIfNull(replacement);
+        if (replacement.TimeSeconds != expectedCurrent.TimeSeconds)
+        {
+            throw new ArgumentException("Replacement time must remain unchanged.", nameof(replacement));
+        }
+
+        return UpdateTransformKeyframe(actorId, expectedCurrent, replacement);
+    }
+
+    public bool UpdateTransformKeyframe(
+        string actorId,
+        TransformKeyframe expectedCurrent,
+        TransformKeyframe replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+        ArgumentNullException.ThrowIfNull(replacement);
+        EnsureTimeWithinDocument(replacement.TimeSeconds, nameof(replacement));
 
         var actor = GetRequiredActor(actorId);
         var current = actor.GetTransformKeyframe(expectedCurrent.Id);
@@ -170,11 +186,22 @@ public sealed class SceneDocument : ISceneSnapshotSource
             return false;
         }
 
-        var updated = actor.ReplaceTransformKeyframe(expectedCurrent, replacement);
+        var updated = actor.UpdateTransformKeyframe(expectedCurrent, replacement);
         _actorsById[actorId] = updated;
         _actors[_actors.IndexOf(actor)] = updated;
         RaiseChanged();
         return true;
+    }
+
+    public void RemoveTransformKeyframe(string actorId, TransformKeyframe expectedCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+
+        var actor = GetRequiredActor(actorId);
+        var updated = actor.RemoveTransformKeyframe(expectedCurrent);
+        _actorsById[actorId] = updated;
+        _actors[_actors.IndexOf(actor)] = updated;
+        RaiseChanged();
     }
 
     public SceneSnapshot CreateSnapshot(double timeSeconds)

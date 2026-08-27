@@ -30,6 +30,11 @@ public sealed class ActorTrack
         ArgumentNullException.ThrowIfNull(lockOnKeyframes);
 
         var copiedTransforms = CopySortedUnique(transformKeyframes, static frame => frame.TimeSeconds, static frame => frame.Id, nameof(transformKeyframes));
+        if (copiedTransforms.Length == 0)
+        {
+            throw new ArgumentException("An actor must have at least one transform keyframe.", nameof(transformKeyframes));
+        }
+
         var copiedActions = CopySortedUnique(actionKeyframes, static frame => frame.TimeSeconds, static frame => frame.Id, nameof(actionKeyframes));
         var copiedLockOns = CopySortedUnique(lockOnKeyframes, static frame => frame.TimeSeconds, static frame => frame.Id, nameof(lockOnKeyframes));
 
@@ -68,16 +73,27 @@ public sealed class ActorTrack
     {
         ArgumentNullException.ThrowIfNull(expectedCurrent);
         ArgumentNullException.ThrowIfNull(replacement);
-        if (replacement.Id != expectedCurrent.Id || replacement.TimeSeconds != expectedCurrent.TimeSeconds)
+        if (replacement.TimeSeconds != expectedCurrent.TimeSeconds)
         {
-            throw new ArgumentException("Replacement identity and time must remain unchanged.", nameof(replacement));
+            throw new ArgumentException("Replacement time must remain unchanged.", nameof(replacement));
+        }
+
+        return UpdateTransformKeyframe(expectedCurrent, replacement);
+    }
+
+    public ActorTrack UpdateTransformKeyframe(
+        TransformKeyframe expectedCurrent,
+        TransformKeyframe replacement)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+        ArgumentNullException.ThrowIfNull(replacement);
+        if (replacement.Id != expectedCurrent.Id)
+        {
+            throw new ArgumentException("Replacement identity must remain unchanged.", nameof(replacement));
         }
 
         var current = GetTransformKeyframe(expectedCurrent.Id);
-        if (!SameTransform(current, expectedCurrent))
-        {
-            throw new InvalidOperationException("The transform keyframe changed after the edit began.");
-        }
+        ValidateExpected(current, expectedCurrent);
 
         return new ActorTrack(
             ActorId,
@@ -88,16 +104,31 @@ public sealed class ActorTrack
             _lockOnKeyframes);
     }
 
+    public ActorTrack RemoveTransformKeyframe(TransformKeyframe expectedCurrent)
+    {
+        ArgumentNullException.ThrowIfNull(expectedCurrent);
+
+        var current = GetTransformKeyframe(expectedCurrent.Id);
+        ValidateExpected(current, expectedCurrent);
+        if (_transformKeyframes.Count == 1)
+        {
+            throw new InvalidOperationException("An actor must keep at least one transform keyframe.");
+        }
+
+        return new ActorTrack(
+            ActorId,
+            DisplayName,
+            Role,
+            _transformKeyframes.Where(frame => frame.Id != current.Id),
+            _actionKeyframes,
+            _lockOnKeyframes);
+    }
+
     public EvaluatedTransform Evaluate(double timeSeconds)
     {
         if (!double.IsFinite(timeSeconds))
         {
             throw new ArgumentOutOfRangeException(nameof(timeSeconds), "Evaluation time must be finite.");
-        }
-
-        if (_transformKeyframes.Count == 0)
-        {
-            throw new InvalidOperationException("An empty actor track cannot be evaluated.");
         }
 
         if (timeSeconds <= _transformKeyframes[0].TimeSeconds)
@@ -163,6 +194,14 @@ public sealed class ActorTrack
         left.TimeSeconds == right.TimeSeconds &&
         left.Position == right.Position &&
         TransformKeyframe.NormalizeYaw(left.YawDegrees) == TransformKeyframe.NormalizeYaw(right.YawDegrees);
+
+    private static void ValidateExpected(TransformKeyframe current, TransformKeyframe expected)
+    {
+        if (!SameTransform(current, expected))
+        {
+            throw new InvalidOperationException("The transform keyframe changed after the edit began.");
+        }
+    }
 
     private static EvaluatedTransform Interpolate(
         TransformKeyframe left,
