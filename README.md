@@ -164,7 +164,7 @@ dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug 
 & .\scripts\Test-GodotRuntime.ps1
 ```
 
-`Test-ProjectSkeleton.ps1`은 `.sln`, `project.godot`, 메인 장면·스크립트, Domain/Application/Editor의 playback·timeline 파일, 테스트 소스의 존재와 C#·Forward Plus·`Godot.NET.Sdk/4.7.2`·`net8.0` 설정, 네 패널과 timeline control, 사용자·아키텍처·roadmap 문서 계약을 검사한다. `Test-GodotRuntime.ps1`은 위의 D 드라이브 Godot 콘솔을 사용해 .NET 빌드, 리소스 import, Godot 솔루션 빌드, 메인 장면 실행을 차례로 수행한다. 모든 명령은 종료 코드 0이어야 하며, xUnit 테스트 실패는 0개, 장면 출력에는 기존 exact marker와 `TIMELINE_PLAYBACK_READY ...`, 최종 출력에는 `GODOT_RUNTIME_VERIFICATION=PASS`가 있어야 한다.
+`Test-ProjectSkeleton.ps1`은 `.sln`, `project.godot`, 메인 장면·스크립트, Domain/Application/Editor의 playback·timeline 파일, 테스트 소스와 사용자·아키텍처·roadmap 문서의 존재, C#·Forward Plus·`Godot.NET.Sdk/4.7.2`·`net8.0` 설정, 네 패널과 timeline control 같은 구조를 검사한다. 문서 내용의 의미적 정확성은 자동화된 사람용 문장 grep 대상이 아니며 사람이 리뷰에서 직접 확인한다. `Test-GodotRuntime.ps1`은 위의 D 드라이브 Godot 콘솔을 사용해 .NET 빌드, 리소스 import, Godot 솔루션 빌드, 메인 장면 실행을 차례로 수행한다. 모든 명령은 종료 코드 0이어야 하며, xUnit 테스트 실패는 0개, 장면 출력에는 기존 exact marker와 `TIMELINE_PLAYBACK_READY ...`, 최종 출력에는 `GODOT_RUNTIME_VERIFICATION=PASS`가 있어야 한다.
 
 ### Task 4 SceneDocument와 동시 뷰 투영 개발·검증
 

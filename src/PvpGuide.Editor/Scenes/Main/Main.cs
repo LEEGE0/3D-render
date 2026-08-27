@@ -175,7 +175,7 @@ public partial class Main : Control
 
     public override void _Process(double delta) => _playback?.Advance(delta);
 
-    public override void _UnhandledKeyInput(InputEvent @event)
+    public override void _Input(InputEvent @event)
     {
         if (@event is InputEventKey { Keycode: Key.Space, Pressed: true, Echo: false })
         {
@@ -391,6 +391,8 @@ public partial class Main : Control
         Label timelineStatus)
     {
         const double midpointSeconds = 0.5;
+        const double activeAdvanceDeltaSeconds = 0.1;
+        const double userScrubSeconds = 0.7;
         var actorRoot = actorsRoot.GetNodeOrNull<Node3D>("Actor_runtime_actor")
             ?? throw new InvalidOperationException("타임라인 통합 검증 실패: runtime actor root가 없습니다.");
         var actorBefore = document.Actors.Single(actor => actor.ActorId == "runtime-actor");
@@ -485,24 +487,77 @@ public partial class Main : Control
                     session.EditLockReason?.Contains("재생 중", StringComparison.Ordinal) == true,
                 "PlayPauseButton.Pressed가 재생 상태와 편집 잠금을 갱신하지 않았습니다.");
 
-            _UnhandledKeyInput(new InputEventKey { Keycode = Key.Space, Pressed = true, Echo = false });
-            Require(!session.Playback.IsPlaying && playPauseButton.Text == "재생" &&
-                    IsNear(session.Playback.CurrentTimeSeconds, midpointSeconds),
-                "Main Space input이 같은 toggle 경로로 재생을 일시정지하지 않았습니다.");
-            _UnhandledKeyInput(new InputEventKey { Keycode = Key.Space, Pressed = true, Echo = false });
+            var topApplyCountBeforeActiveAdvance = topViewSurface.ApplyCount;
+            var worldApplyCountBeforeActiveAdvance = worldAdapter.ApplyCount;
+            session.Playback.Advance(activeAdvanceDeltaSeconds);
             Require(session.Playback.IsPlaying && playPauseButton.Text == "일시정지" &&
-                    IsNear(session.Playback.CurrentTimeSeconds, midpointSeconds),
-                "Main Space input이 같은 toggle 경로로 재생을 재개하지 않았습니다.");
-            Require(topViewSurface.ApplyCount == topApplyCountBefore + 1 &&
-                    worldAdapter.ApplyCount == worldApplyCountBefore + 1,
+                    IsNear(session.Playback.CurrentTimeSeconds, 0.6) &&
+                    IsNear(timeSlider.Value, 0.6) &&
+                    currentTimeLabel.Text.Contains("0.600초", StringComparison.Ordinal),
+                "재생 중 sub-end Advance가 active 상태와 slider/label 전진을 보존하지 않았습니다.");
+            Require(topViewSurface.ApplyCount == topApplyCountBeforeActiveAdvance + 1 &&
+                    worldAdapter.ApplyCount == worldApplyCountBeforeActiveAdvance + 1 &&
+                    IsPosition(actorRoot.Position, 3.4f, 1.2f, -2.4f) &&
+                    IsNear(actorRoot.Rotation.Y, -Math.PI * 0.3),
+                "재생 중 sub-end Advance가 TopView와 WorldView에 새 projection을 정확히 한 번 전달하지 않았습니다.");
+
+            var topApplyCountBeforeUserScrub = topViewSurface.ApplyCount;
+            var worldApplyCountBeforeUserScrub = worldAdapter.ApplyCount;
+            timeSlider.Value = userScrubSeconds;
+            Require(!session.Playback.IsPlaying && playPauseButton.Text == "재생" &&
+                    IsNear(session.Playback.CurrentTimeSeconds, userScrubSeconds) &&
+                    IsNear(timeSlider.Value, userScrubSeconds) &&
+                    currentTimeLabel.Text.Contains("0.700초", StringComparison.Ordinal),
+                "재생 중 실제 HSlider.ValueChanged scrub이 pause 후 새 시각을 seek하지 않았습니다.");
+            Require(topViewSurface.ApplyCount == topApplyCountBeforeUserScrub + 1 &&
+                    worldAdapter.ApplyCount == worldApplyCountBeforeUserScrub + 1 &&
+                    IsPosition(actorRoot.Position, 3.8f, 1.4f, -2.8f) &&
+                    IsNear(actorRoot.Rotation.Y, -Math.PI * 0.35),
+                "사용자 slider scrub이 TopView와 WorldView에 새 projection을 정확히 한 번 전달하지 않았습니다.");
+
+            playPauseButton.EmitSignal(Button.SignalName.Pressed);
+            Require(session.Playback.IsPlaying && IsNear(session.Playback.CurrentTimeSeconds, userScrubSeconds),
+                "Space viewport routing 전에 playback을 재개하지 못했습니다.");
+
+            var focusedStopPresses = 0;
+            Action focusedStopHandler = () => focusedStopPresses++;
+            stopButton.Pressed += focusedStopHandler;
+            try
+            {
+                stopButton.GrabFocus();
+                Require(ReferenceEquals(GetViewport().GuiGetFocusOwner(), stopButton),
+                    "Space viewport routing probe에서 Stop button이 실제 focus를 얻지 못했습니다.");
+
+                PushKeyInput(GetViewport(), Key.Space, pressed: true);
+                PushKeyInput(GetViewport(), Key.Space, pressed: false);
+                Require(!session.Playback.IsPlaying && playPauseButton.Text == "재생" &&
+                        IsNear(session.Playback.CurrentTimeSeconds, userScrubSeconds) &&
+                        focusedStopPresses == 0,
+                    "focus된 Stop button보다 먼저 global Space toggle이 처리되지 않았습니다.");
+
+                PushKeyInput(GetViewport(), Key.Space, pressed: true);
+                PushKeyInput(GetViewport(), Key.Space, pressed: false);
+                Require(session.Playback.IsPlaying && playPauseButton.Text == "일시정지" &&
+                        IsNear(session.Playback.CurrentTimeSeconds, userScrubSeconds) &&
+                        focusedStopPresses == 0,
+                    "global Space viewport routing이 같은 toggle 경로로 재생을 재개하지 않았습니다.");
+            }
+            finally
+            {
+                stopButton.Pressed -= focusedStopHandler;
+                stopButton.ReleaseFocus();
+            }
+
+            Require(topViewSurface.ApplyCount == topApplyCountBefore + 3 &&
+                    worldAdapter.ApplyCount == worldApplyCountBefore + 3,
                 "같은 시각의 play/pause 전이가 (revision,time) projection을 중복 적용했습니다.");
 
             session.Playback.Advance(10);
             Require(IsNear(session.Playback.CurrentTimeSeconds, 1) && !session.Playback.IsPlaying,
                 "결정적 Advance가 duration에 clamp한 뒤 자동 pause하지 않았습니다.");
             Require(IsPosition(actorRoot.Position, 5, 2, -4) && IsNear(actorRoot.Rotation.Y, -Math.PI / 2) &&
-                    topViewSurface.ApplyCount == topApplyCountBefore + 2 &&
-                    worldAdapter.ApplyCount == worldApplyCountBefore + 2,
+                    topViewSurface.ApplyCount == topApplyCountBefore + 4 &&
+                    worldAdapter.ApplyCount == worldApplyCountBefore + 4,
                 "end clamp snapshot이 두 view에 마지막 committed 변환으로 동기화되지 않았습니다.");
 
             stopButton.EmitSignal(Button.SignalName.Pressed);
@@ -518,8 +573,8 @@ public partial class Main : Control
             Require(IsPosition(actorRoot.Position, 1, 0, 0) && IsNear(actorRoot.Rotation.Y, 0) &&
                     IsNear(xInput.Value, 1) && IsNear(yInput.Value, 0) &&
                     IsNear(zInput.Value, 0) && IsNear(yawInput.Value, 0) &&
-                    topViewSurface.ApplyCount == topApplyCountBefore + 3 &&
-                    worldAdapter.ApplyCount == worldApplyCountBefore + 3,
+                    topViewSurface.ApplyCount == topApplyCountBefore + 5 &&
+                    worldAdapter.ApplyCount == worldApplyCountBefore + 5,
                 "Stop 뒤 두 view와 Inspector가 edited t=0 committed 변환을 복원하지 않았습니다.");
 
             var actorAfter = document.Actors.Single(actor => actor.ActorId == "runtime-actor");
@@ -875,6 +930,14 @@ public partial class Main : Control
             ButtonMask = leftButtonPressed ? MouseButtonMask.Left : (MouseButtonMask)0,
             Position = new Vector2((float)position.X, (float)position.Y),
         });
+
+    private static void PushKeyInput(Viewport viewport, Key keycode, bool pressed) =>
+        viewport.PushInput(new InputEventKey
+        {
+            Keycode = keycode,
+            Pressed = pressed,
+            Echo = false,
+        }, inLocalCoords: true);
 
     private static bool IsPosition(Vector3 actual, float x, float y, float z) =>
         IsNear(actual.X, x) && IsNear(actual.Y, y) && IsNear(actual.Z, z);

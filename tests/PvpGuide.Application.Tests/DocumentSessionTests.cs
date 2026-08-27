@@ -71,11 +71,122 @@ public sealed class DocumentSessionTests
         session.UpdatePreview(new Position3(8, 2, 9), 90);
         var events = new List<string>();
         session.PreviewChanged += (_, args) => events.Add(args.Preview is null ? "preview:null" : "preview:value");
+        session.EditAvailabilityChanged += (_, _) => events.Add("availability");
         session.Playback.Changed += (_, _) => events.Add("playback");
 
         Assert.True(session.Playback.Seek(0.5));
 
-        Assert.Equal(["preview:null", "playback"], events);
+        Assert.Equal(["preview:null", "availability", "playback"], events);
+    }
+
+    [Fact]
+    public void Preview_clear_observer_cannot_reentrantly_persist_a_transform_after_playback_starts()
+    {
+        var session = CreateQuarterSecondSession(out var document);
+        session.SelectActor("host");
+        session.Playback.Seek(0.25);
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(8, 2, 9), 90);
+        var committedBefore = document.GetTransformKeyframe("host", "host-first");
+        bool? observedCanEdit = null;
+        string? observedLockReason = null;
+        bool? reentrantEditApplied = null;
+        session.PreviewChanged += (_, args) =>
+        {
+            if (args.Preview is not null)
+            {
+                return;
+            }
+
+            observedCanEdit = session.CanEditSelectedTransform;
+            observedLockReason = session.EditLockReason;
+            reentrantEditApplied = session.SetSelectedActorTransform(new Position3(99, 98, 97), 180);
+        };
+
+        Assert.True(session.Playback.Play());
+
+        Assert.False(observedCanEdit);
+        Assert.Equal("재생 중에는 편집할 수 없습니다", observedLockReason);
+        Assert.False(reentrantEditApplied);
+        Assert.Same(committedBefore, document.GetTransformKeyframe("host", "host-first"));
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, session.UndoCount);
+        Assert.Equal(0, session.RedoCount);
+        Assert.False(session.CommitPreview());
+    }
+
+    [Fact]
+    public void Preview_clear_observer_cannot_reentrantly_begin_a_new_preview_after_playback_starts()
+    {
+        var session = CreateQuarterSecondSession(out var document);
+        session.SelectActor("host");
+        session.Playback.Seek(0.25);
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(8, 2, 9), 90);
+        var committedBefore = document.GetTransformKeyframe("host", "host-first");
+        var beginWasAllowed = false;
+        InvalidOperationException? rejection = null;
+        EventHandler<TransformPreviewChangedEventArgs> adversarialObserver = (_, args) =>
+        {
+            if (args.Preview is not null)
+            {
+                return;
+            }
+
+            try
+            {
+                session.BeginPreview();
+                beginWasAllowed = true;
+            }
+            catch (InvalidOperationException exception)
+            {
+                rejection = exception;
+            }
+        };
+        session.PreviewChanged += adversarialObserver;
+
+        Assert.True(session.Playback.Play());
+        session.PreviewChanged -= adversarialObserver;
+
+        var residualPreviewClears = 0;
+        session.PreviewChanged += (_, args) => residualPreviewClears += args.Preview is null ? 1 : 0;
+        session.CancelPreview();
+
+        Assert.False(beginWasAllowed);
+        Assert.NotNull(rejection);
+        Assert.Contains("재생 중에는 편집할 수 없습니다", rejection.Message);
+        Assert.Equal(0, residualPreviewClears);
+        Assert.Same(committedBefore, document.GetTransformKeyframe("host", "host-first"));
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, session.UndoCount);
+        Assert.Equal(0, session.RedoCount);
+    }
+
+    [Fact]
+    public void Preview_clear_observer_that_pauses_playback_does_not_receive_stale_outer_availability()
+    {
+        var session = CreateQuarterSecondSession(out _);
+        session.SelectActor("host");
+        session.Playback.Seek(0.25);
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(8, 2, 9), 90);
+        var availabilityChanges = new List<(bool CanEdit, string? Reason)>();
+        session.PreviewChanged += (_, args) =>
+        {
+            if (args.Preview is null)
+            {
+                session.Playback.Pause();
+            }
+        };
+        session.EditAvailabilityChanged += (_, args) =>
+            availabilityChanges.Add((args.CanEditSelectedTransform, args.EditLockReason));
+
+        Assert.True(session.Playback.Play());
+
+        Assert.False(session.Playback.IsPlaying);
+        Assert.True(session.CanEditSelectedTransform);
+        Assert.Null(session.EditLockReason);
+        Assert.Equal([(true, null)], availabilityChanges);
     }
 
     [Fact]

@@ -329,32 +329,51 @@ public sealed class DocumentSession
 
     private void OnPlaybackChanged(object? sender, PlaybackChangedEventArgs args)
     {
+        var availabilityChange = RefreshEditAvailabilityState();
         try
         {
             ClearPreview();
         }
         catch (Exception exception)
         {
-            CompleteMutationExceptionTransition(exception, () => UpdateEditAvailability());
+            CompleteMutationExceptionTransition(
+                exception,
+                () => RaiseEditAvailabilityChanged(availabilityChange));
             throw;
         }
 
-        UpdateEditAvailability();
+        RaiseEditAvailabilityChanged(availabilityChange);
     }
 
     private void UpdateEditAvailability(bool raiseEvent = true)
     {
+        var availabilityChange = RefreshEditAvailabilityState();
+        if (raiseEvent)
+        {
+            RaiseEditAvailabilityChanged(availabilityChange);
+        }
+    }
+
+    private EditAvailabilityChangedEventArgs? RefreshEditAvailabilityState()
+    {
         var (canEdit, reason) = GetEditAvailability();
         if (CanEditSelectedTransform == canEdit && EditLockReason == reason)
         {
-            return;
+            return null;
         }
 
         CanEditSelectedTransform = canEdit;
         EditLockReason = reason;
-        if (raiseEvent)
+        return new EditAvailabilityChangedEventArgs(canEdit, reason);
+    }
+
+    private void RaiseEditAvailabilityChanged(EditAvailabilityChangedEventArgs? availabilityChange)
+    {
+        if (availabilityChange is not null &&
+            availabilityChange.CanEditSelectedTransform == CanEditSelectedTransform &&
+            availabilityChange.EditLockReason == EditLockReason)
         {
-            EditAvailabilityChanged?.Invoke(this, new EditAvailabilityChangedEventArgs(canEdit, reason));
+            EditAvailabilityChanged?.Invoke(this, availabilityChange);
         }
     }
 

@@ -52,6 +52,20 @@ public sealed class PlaybackClockTests
     }
 
     [Fact]
+    public void Advance_crossing_duration_notifies_exactly_one_final_end_state()
+    {
+        var clock = new PlaybackClock(durationSeconds: 1, framesPerSecond: 30);
+        Assert.True(clock.Seek(0.75));
+        Assert.True(clock.Play());
+        var changes = new List<(double Time, bool IsPlaying)>();
+        clock.Changed += (_, args) => changes.Add((args.CurrentTimeSeconds, args.IsPlaying));
+
+        Assert.True(clock.Advance(0.5));
+
+        Assert.Equal([(1d, false)], changes);
+    }
+
+    [Fact]
     public void Play_at_end_rewinds_and_notifies_only_its_final_playing_state()
     {
         var clock = new PlaybackClock(1, 30);

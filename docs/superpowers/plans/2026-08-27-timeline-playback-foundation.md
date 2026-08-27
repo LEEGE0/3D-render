@@ -268,7 +268,7 @@
 
 - [x] **Step 3: 검증 스크립트와 한글 문서를 갱신한다**
 
-  `Test-ProjectSkeleton.ps1`은 새 Application/Editor 파일과 scene node, README/architecture/roadmap의 핵심 계약을 검사한다. `Test-GodotRuntime.ps1`은 기존 exact marker에 새 exact marker를 추가한다.
+  `Test-ProjectSkeleton.ps1`은 새 Application/Editor 파일과 scene node의 구조, README/architecture/roadmap 문서 파일의 존재를 검사한다. 문서 내용의 의미적 정확성은 자동화된 사람용 문장 grep으로 판정하지 않고 사람이 리뷰에서 직접 확인한다. `Test-GodotRuntime.ps1`은 기존 exact marker에 새 exact marker를 추가한다.
 
   README에는 slider·Play/Pause·Stop·Space 사용법과 읽기 전용 시점 잠금을 기록한다. editor architecture에는 playback 상태 소유권, preview cancellation, `(revision,time)` projection을 기록한다. roadmap은 단계 3A를 완료로 표시하고 다음 단위를 임의 시점 변환 키프레임 CRUD로 명확히 한다.
 
