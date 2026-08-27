@@ -634,8 +634,10 @@ Expected: 모든 테스트 PASS, skeleton PASS, 두 startup failure probe PASS, 
 
 `git diff --check`, `git status --short`, `git diff --stat`를 확인한다. `.godot/`, build output, local-assets, tools, cache, exports, 로그와 임시 agent report를 추적하지 않는다. 새 Godot C# `.uid`는 runtime import 후 repository convention에 따라 포함한다.
 
-- [ ] **Step 10: 메인 에이전트가 검토·커밋·푸시하고 SHA를 확인한다**
+- [x] **Step 10: 메인 에이전트가 검토·커밋·푸시하고 SHA를 확인한다**
 
 Commit: `docs: Action Lock-on 트랙 검증과 사용법 정리`
 
 Push 뒤 local HEAD, upstream과 `git ls-remote` SHA가 모두 같아야 한다.
+
+완료 기록: `cef3ec0e1d54492438857d419536768fd4ed3ca1`을 `codex/timeline-playback-foundation`에 푸시했고 local HEAD, upstream, GitHub 원격 SHA가 일치함을 확인했다.
