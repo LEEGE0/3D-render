@@ -20,6 +20,7 @@ public partial class Main : Control
     private TransformInspectorController? _inspectorController;
     private TimelineController? _timelineController;
     private TopViewSurface? _topViewSurface;
+    private TransformTrackSurface? _transformTrackSurface;
     private PlaybackClock? _playback;
 
     private static readonly string[] RequiredPanels =
@@ -50,7 +51,9 @@ public partial class Main : Control
         var ground = GetNodeOrNull<MeshInstance3D>("WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot/Ground");
         var actorsRoot = GetNodeOrNull<Node3D>("WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot/Actors");
         var selectedActorLabel = GetNodeOrNull<Label>("InspectorPanel/TransformInspector/SelectedActorLabel");
+        var selectedKeyframeLabel = GetNodeOrNull<Label>("InspectorPanel/TransformInspector/SelectedKeyframeLabel");
         var errorLabel = GetNodeOrNull<Label>("InspectorPanel/TransformInspector/ErrorLabel");
+        var timeInput = GetNodeOrNull<SpinBox>("InspectorPanel/TransformInspector/TimeInput");
         var xInput = GetNodeOrNull<SpinBox>("InspectorPanel/TransformInspector/XInput");
         var yInput = GetNodeOrNull<SpinBox>("InspectorPanel/TransformInspector/YInput");
         var zInput = GetNodeOrNull<SpinBox>("InspectorPanel/TransformInspector/ZInput");
@@ -60,15 +63,19 @@ public partial class Main : Control
         var redoButton = GetNodeOrNull<Button>("InspectorPanel/TransformInspector/RedoButton");
         var playPauseButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/PlaybackButtons/PlayPauseButton");
         var stopButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/PlaybackButtons/StopButton");
+        var transformTrackSurface = GetNodeOrNull<TransformTrackSurface>("TimelinePanel/TimelineControls/TransformTrackSurface");
+        var addKeyframeButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/KeyframeToolbar/AddKeyframeButton");
+        var deleteKeyframeButton = GetNodeOrNull<Button>("TimelinePanel/TimelineControls/KeyframeToolbar/DeleteKeyframeButton");
         var timeSlider = GetNodeOrNull<HSlider>("TimelinePanel/TimelineControls/TimeSlider");
         var currentTimeLabel = GetNodeOrNull<Label>("TimelinePanel/TimelineControls/CurrentTimeLabel");
         var timelineStatus = GetNodeOrNull<Label>("TimelinePanel/TimelineControls/TimelineStatus");
         if (topViewSurface is null || worldViewportContainer is null || worldViewport is null || worldRoot is null ||
             camera is null || light is null || ground is null || actorsRoot is null ||
-            selectedActorLabel is null || errorLabel is null ||
+            selectedActorLabel is null || selectedKeyframeLabel is null || errorLabel is null || timeInput is null ||
             xInput is null || yInput is null || zInput is null || yawInput is null ||
             applyButton is null || undoButton is null || redoButton is null ||
-            playPauseButton is null || stopButton is null || timeSlider is null ||
+            playPauseButton is null || stopButton is null || transformTrackSurface is null ||
+            addKeyframeButton is null || deleteKeyframeButton is null || timeSlider is null ||
             currentTimeLabel is null || timelineStatus is null)
         {
             GD.PushError("타임라인과 기본 편집 UI에 필요한 자식 노드가 없습니다.");
@@ -96,6 +103,8 @@ public partial class Main : Control
             _playback = session.Playback;
             _topViewSurface = topViewSurface;
             topViewSurface.Initialize(session);
+            _transformTrackSurface = transformTrackSurface;
+            transformTrackSurface.Attach(session);
             _projectionController = new SceneProjectionController(
                 session.SnapshotSource,
                 session.Playback,
@@ -108,7 +117,9 @@ public partial class Main : Control
             _inspectorController = new TransformInspectorController(
                 session,
                 selectedActorLabel,
+                selectedKeyframeLabel,
                 errorLabel,
+                timeInput,
                 xInput,
                 yInput,
                 zInput,
@@ -122,7 +133,10 @@ public partial class Main : Control
                 stopButton,
                 timeSlider,
                 currentTimeLabel,
-                timelineStatus);
+                timelineStatus,
+                transformTrackSurface,
+                addKeyframeButton,
+                deleteKeyframeButton);
 
             _projectionController.ProjectCurrent();
             GD.Print($"PROJECTION_SYNC_READY revision={document.Revision} top={topViewSurface.ApplyCount} world={worldAdapter.ApplyCount}");
@@ -156,12 +170,15 @@ public partial class Main : Control
                 yInput,
                 zInput,
                 yawInput,
+                timeInput,
                 applyButton,
                 undoButton,
                 redoButton,
                 errorLabel,
                 playPauseButton,
                 stopButton,
+                addKeyframeButton,
+                deleteKeyframeButton,
                 timeSlider,
                 currentTimeLabel,
                 timelineStatus);
@@ -190,12 +207,14 @@ public partial class Main : Control
     {
         _timelineController?.Dispose();
         _timelineController = null;
-        _projectionController?.Dispose();
-        _projectionController = null;
-        _previewController?.Dispose();
-        _previewController = null;
         _inspectorController?.Dispose();
         _inspectorController = null;
+        _previewController?.Dispose();
+        _previewController = null;
+        _projectionController?.Dispose();
+        _projectionController = null;
+        _transformTrackSurface?.Detach();
+        _transformTrackSurface = null;
         _topViewSurface?.DetachSession();
         _topViewSurface = null;
         _playback = null;
@@ -380,12 +399,15 @@ public partial class Main : Control
         SpinBox yInput,
         SpinBox zInput,
         SpinBox yawInput,
+        SpinBox timeInput,
         Button applyButton,
         Button undoButton,
         Button redoButton,
         Label errorLabel,
         Button playPauseButton,
         Button stopButton,
+        Button addKeyframeButton,
+        Button deleteKeyframeButton,
         HSlider timeSlider,
         Label currentTimeLabel,
         Label timelineStatus)
@@ -421,6 +443,8 @@ public partial class Main : Control
 
         try
         {
+            Require(IsNear(timeInput.Step, 1d / 30d),
+                "TimeInput이 장면의 1/30 프레임 단계를 유지하지 않았습니다.");
             Require(revisionBefore == 4 && topApplyCountBefore == 4 && worldApplyCountBefore == 4,
                 "기본 편집 검사가 revision/top/world 4에서 끝나지 않았습니다.");
             Require(actorBefore.TransformKeyframes.Count == 2 &&
@@ -464,11 +488,13 @@ public partial class Main : Control
             VerifyMidpointTopViewYaw(topViewSurface, document.CreateSnapshot(midpointSeconds));
 
             Require(!session.CanEditSelectedTransform &&
-                    session.EditLockReason?.Contains("최초 키프레임 시각", StringComparison.Ordinal) == true,
+                    session.EditLockReason?.Contains("선택한 키프레임 시각", StringComparison.Ordinal) == true,
                 "0.5초 read-only 편집 잠금이 활성화되지 않았습니다.");
             Require(!xInput.Editable && !yInput.Editable && !zInput.Editable && !yawInput.Editable &&
                     applyButton.Disabled && undoButton.Disabled && redoButton.Disabled &&
-                    timelineStatus.Text.Contains("최초 키프레임 시각", StringComparison.Ordinal),
+                    !addKeyframeButton.Disabled && deleteKeyframeButton.Disabled &&
+                    timelineStatus.Text.Contains("삭제 불가", StringComparison.Ordinal) &&
+                    timelineStatus.Text.Contains("선택한 키프레임 시각", StringComparison.Ordinal),
                 "Inspector/history/timeline UI가 0.5초 편집 잠금을 표시하지 않았습니다.");
 
             var guardedPointer = new ScreenPoint(midpointCenter.X + 40, midpointCenter.Y);
@@ -477,8 +503,7 @@ public partial class Main : Control
             SendLeftButton(topViewSurface, guardedPointer, pressed: false);
             xInput.Value = 9;
             applyButton.EmitSignal(Button.SignalName.Pressed);
-            Require(IsNear(xInput.Value, 1) &&
-                    errorLabel.Text.Contains("최초 키프레임 시각", StringComparison.Ordinal) &&
+            Require(errorLabel.Text.Contains("선택한 키프레임 시각", StringComparison.Ordinal) &&
                     IsPosition(actorRoot.Position, 3, 1, -2) && IsNear(actorRoot.Rotation.Y, -Math.PI / 4),
                 "중간 시각 TopView 또는 Inspector edit guard가 committed midpoint를 보존하지 못했습니다.");
 
@@ -567,6 +592,8 @@ public partial class Main : Control
             Require(session.CanEditSelectedTransform && session.EditLockReason is null &&
                     xInput.Editable && yInput.Editable && zInput.Editable && yawInput.Editable &&
                     !applyButton.Disabled && !undoButton.Disabled && redoButton.Disabled &&
+                    addKeyframeButton.Disabled && !deleteKeyframeButton.Disabled &&
+                    timelineStatus.Text.Contains("추가 불가", StringComparison.Ordinal) &&
                     timelineStatus.Text.Contains("편집 가능", StringComparison.Ordinal) &&
                     string.IsNullOrWhiteSpace(errorLabel.Text),
                 "Stop 뒤 최초 키프레임 편집 상태가 복원되지 않았습니다.");
@@ -868,7 +895,9 @@ public partial class Main : Control
             _root = new Control { Name = $"InspectorHarness_{actorId}", Visible = false };
             parent.AddChild(_root);
             var selectedActorLabel = Add(new Label());
+            var selectedKeyframeLabel = Add(new Label());
             ErrorLabel = Add(new Label());
+            var timeInput = Add(new SpinBox());
             XInput = Add(new SpinBox());
             var yInput = Add(new SpinBox());
             var zInput = Add(new SpinBox());
@@ -879,7 +908,9 @@ public partial class Main : Control
             _controller = new TransformInspectorController(
                 Session,
                 selectedActorLabel,
+                selectedKeyframeLabel,
                 ErrorLabel,
+                timeInput,
                 XInput,
                 yInput,
                 zInput,

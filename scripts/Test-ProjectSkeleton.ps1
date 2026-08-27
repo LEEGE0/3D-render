@@ -71,6 +71,7 @@ $requiredFiles = @(
     (Join-Path $projectRoot 'Features\Timeline\TimelineTimeFormatter.cs'),
     (Join-Path $projectRoot 'Features\Timeline\TimelineTimeFormatter.cs.uid'),
     (Join-Path $projectRoot 'Features\Timeline\TransformTrackLayout.cs'),
+    (Join-Path $projectRoot 'Features\Timeline\TransformTrackSurface.cs'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs'),
     (Join-Path $projectRoot 'Features\Rendering\RenderQueue.cs.uid'),
     (Join-Path $sampleRoot 'synthetic-topview-v1.scene.json'),
@@ -188,7 +189,13 @@ foreach ($nodeName in @(
     'StopButton',
     'TimeSlider',
     'CurrentTimeLabel',
-    'TimelineStatus'
+    'TimelineStatus',
+    'TransformTrackSurface',
+    'KeyframeToolbar',
+    'AddKeyframeButton',
+    'DeleteKeyframeButton',
+    'SelectedKeyframeLabel',
+    'TimeInput'
 )) {
     Assert-Contains $sceneFile ([regex]::Escape('name="' + $nodeName + '"')) "기본 편집 장면 노드 $nodeName"
 }

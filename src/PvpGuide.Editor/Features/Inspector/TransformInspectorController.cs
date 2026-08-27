@@ -9,7 +9,9 @@ public sealed class TransformInspectorController : IDisposable
 {
     private readonly DocumentSession _session;
     private readonly Label _selectedActorLabel;
+    private readonly Label _selectedKeyframeLabel;
     private readonly Label _errorLabel;
+    private readonly SpinBox _timeInput;
     private readonly SpinBox _xInput;
     private readonly SpinBox _yInput;
     private readonly SpinBox _zInput;
@@ -26,7 +28,9 @@ public sealed class TransformInspectorController : IDisposable
     public TransformInspectorController(
         DocumentSession session,
         Label selectedActorLabel,
+        Label selectedKeyframeLabel,
         Label errorLabel,
+        SpinBox timeInput,
         SpinBox xInput,
         SpinBox yInput,
         SpinBox zInput,
@@ -37,7 +41,9 @@ public sealed class TransformInspectorController : IDisposable
     {
         _session = session ?? throw new ArgumentNullException(nameof(session));
         _selectedActorLabel = selectedActorLabel ?? throw new ArgumentNullException(nameof(selectedActorLabel));
+        _selectedKeyframeLabel = selectedKeyframeLabel ?? throw new ArgumentNullException(nameof(selectedKeyframeLabel));
         _errorLabel = errorLabel ?? throw new ArgumentNullException(nameof(errorLabel));
+        _timeInput = timeInput ?? throw new ArgumentNullException(nameof(timeInput));
         _xInput = xInput ?? throw new ArgumentNullException(nameof(xInput));
         _yInput = yInput ?? throw new ArgumentNullException(nameof(yInput));
         _zInput = zInput ?? throw new ArgumentNullException(nameof(zInput));
@@ -51,17 +57,21 @@ public sealed class TransformInspectorController : IDisposable
         ConfigureInput(_zInput, -1000, 1000);
         ConfigureInput(_yInput, -100, 100);
         ConfigureInput(_yawInput, -360000, 360000);
+        ConfigureTimeInput(_timeInput, 0, _session.Playback.DurationSeconds);
 
         foreach (var input in _inputs)
         {
-            input.ValueChanged += OnValueChanged;
+            input.ValueChanged += OnPoseValueChanged;
             input.GetLineEdit().TextSubmitted += OnTextSubmitted;
         }
+
+        _timeInput.GetLineEdit().TextSubmitted += OnTextSubmitted;
 
         _applyButton.Pressed += OnApplyPressed;
         _undoButton.Pressed += OnUndoPressed;
         _redoButton.Pressed += OnRedoPressed;
         _session.SelectionChanged += OnSelectionChanged;
+        _session.TransformKeyframeSelectionChanged += OnTransformKeyframeSelectionChanged;
         _session.PreviewChanged += OnPreviewChanged;
         _session.EditAvailabilityChanged += OnEditAvailabilityChanged;
         _session.HistoryChanged += OnHistoryChanged;
@@ -80,14 +90,17 @@ public sealed class TransformInspectorController : IDisposable
 
         foreach (var input in _inputs)
         {
-            input.ValueChanged -= OnValueChanged;
+            input.ValueChanged -= OnPoseValueChanged;
             input.GetLineEdit().TextSubmitted -= OnTextSubmitted;
         }
+
+        _timeInput.GetLineEdit().TextSubmitted -= OnTextSubmitted;
 
         _applyButton.Pressed -= OnApplyPressed;
         _undoButton.Pressed -= OnUndoPressed;
         _redoButton.Pressed -= OnRedoPressed;
         _session.SelectionChanged -= OnSelectionChanged;
+        _session.TransformKeyframeSelectionChanged -= OnTransformKeyframeSelectionChanged;
         _session.PreviewChanged -= OnPreviewChanged;
         _session.EditAvailabilityChanged -= OnEditAvailabilityChanged;
         _session.HistoryChanged -= OnHistoryChanged;
@@ -104,7 +117,15 @@ public sealed class TransformInspectorController : IDisposable
         input.AllowLesser = true;
     }
 
-    private void OnValueChanged(double value)
+    private static void ConfigureTimeInput(SpinBox input, double minimum, double maximum)
+    {
+        input.MinValue = minimum;
+        input.MaxValue = maximum;
+        input.AllowGreater = true;
+        input.AllowLesser = true;
+    }
+
+    private void OnPoseValueChanged(double value)
     {
         if (_updatingInputs)
         {
@@ -125,7 +146,7 @@ public sealed class TransformInspectorController : IDisposable
             return;
         }
 
-        if (!TryReadInputs(out var position, out var yawDegrees))
+        if (!TryReadInputs(out _, out var position, out var yawDegrees))
         {
             return;
         }
@@ -151,9 +172,9 @@ public sealed class TransformInspectorController : IDisposable
         }
     }
 
-    private void OnTextSubmitted(string text) => CommitPreview();
+    private void OnTextSubmitted(string text) => CommitSelectedKeyframe();
 
-    private void OnApplyPressed() => CommitPreview();
+    private void OnApplyPressed() => CommitSelectedKeyframe();
 
     private void OnUndoPressed()
     {
@@ -195,7 +216,7 @@ public sealed class TransformInspectorController : IDisposable
 
     }
 
-    private void CommitPreview()
+    private void CommitSelectedKeyframe()
     {
         if (!_session.CanEditSelectedTransform)
         {
@@ -204,31 +225,28 @@ public sealed class TransformInspectorController : IDisposable
             return;
         }
 
-        if (_session.SelectedActorId is null)
+        if (_session.SelectedActorId is null || _session.GetSelectedTransform() is null)
         {
-            ShowError("변환을 적용하려면 먼저 배우를 선택하세요.");
+            ShowError("변환을 적용하려면 먼저 키프레임을 선택하세요.");
             return;
         }
 
-        if (!TryReadInputs(out var position, out var yawDegrees))
+        if (!TryReadInputs(out var timeSeconds, out var position, out var yawDegrees))
         {
             return;
         }
 
         try
         {
-            if (!_hasActivePreview)
-            {
-                _session.BeginPreview();
-                _hasActivePreview = true;
-            }
-
-            _session.UpdatePreview(position, NormalizeYaw(yawDegrees));
             var revisionBeforeCommit = _session.CurrentRevision;
+            CancelActivePreview();
             SceneEditResult result;
             try
             {
-                result = _session.CommitPreviewDetailed();
+                result = _session.UpdateSelectedTransformKeyframe(
+                    timeSeconds,
+                    position,
+                    NormalizeYaw(yawDegrees));
             }
             catch (Exception exception) when (_session.CurrentRevision > revisionBeforeCommit)
             {
@@ -248,7 +266,7 @@ public sealed class TransformInspectorController : IDisposable
                     ShowError("적용할 실제 변환 변경이 없습니다.");
                     break;
                 case SceneEditResult.Conflict:
-                    ShowError("선택한 배우의 변경이 오래되어 최신 문서 상태와 충돌했습니다.");
+                    ShowError("선택한 키프레임의 변경이 오래되었거나 같은 시각의 키프레임과 충돌했습니다.");
                     break;
                 default:
                     throw new InvalidOperationException($"알 수 없는 편집 결과입니다: {result}");
@@ -256,25 +274,32 @@ public sealed class TransformInspectorController : IDisposable
         }
         catch (ArgumentException exception)
         {
-            CancelPreviewAfterError($"변환 값을 적용할 수 없습니다: {exception.Message}");
+            CancelPreviewAfterError($"키프레임 값을 적용할 수 없습니다: {exception.Message}");
         }
         catch (InvalidOperationException exception)
         {
-            CancelPreviewAfterError($"선택한 배우의 변경이 오래되어 적용할 수 없습니다: {exception.Message}");
+            CancelPreviewAfterError($"선택한 키프레임의 변경이 오래되어 적용할 수 없습니다: {exception.Message}");
         }
 
     }
 
-    private bool TryReadInputs(out Position3 position, out double yawDegrees)
+    private bool TryReadInputs(out double timeSeconds, out Position3 position, out double yawDegrees)
     {
+        timeSeconds = _timeInput.Value;
         position = default;
         yawDegrees = _yawInput.Value;
         var x = _xInput.Value;
         var y = _yInput.Value;
         var z = _zInput.Value;
-        if (!double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z) || !double.IsFinite(yawDegrees))
+        if (!double.IsFinite(timeSeconds) || !double.IsFinite(x) || !double.IsFinite(y) || !double.IsFinite(z) || !double.IsFinite(yawDegrees))
         {
-            RejectInvalidInput("좌표와 방향각은 유한한 숫자여야 합니다.");
+            RejectInvalidInput("시각, 좌표와 방향각은 유한한 숫자여야 합니다.");
+            return false;
+        }
+
+        if (timeSeconds < 0 || timeSeconds > _session.Playback.DurationSeconds)
+        {
+            RejectInvalidInput($"시각은 0~{_session.Playback.DurationSeconds:0.###}초 범위 안이어야 합니다.");
             return false;
         }
 
@@ -289,6 +314,16 @@ public sealed class TransformInspectorController : IDisposable
     }
 
     private void OnSelectionChanged(object? sender, SelectionChangedEventArgs eventArgs)
+    {
+        _hasActivePreview = false;
+        RefreshCommittedValues();
+        UpdateButtonStates();
+        RefreshEditAvailabilityPresentation();
+    }
+
+    private void OnTransformKeyframeSelectionChanged(
+        object? sender,
+        TransformKeyframeSelectionChangedEventArgs eventArgs)
     {
         _hasActivePreview = false;
         RefreshCommittedValues();
@@ -320,7 +355,7 @@ public sealed class TransformInspectorController : IDisposable
         _hasActivePreview = true;
         if (eventArgs.Preview.ActorId == _session.SelectedActorId)
         {
-            SetInputs(eventArgs.Preview.Position, eventArgs.Preview.YawDegrees);
+            SetInputs(_timeInput.Value, eventArgs.Preview.Position, eventArgs.Preview.YawDegrees);
             ClearError();
         }
     }
@@ -341,6 +376,7 @@ public sealed class TransformInspectorController : IDisposable
         if (actorId is null)
         {
             _selectedActorLabel.Text = "선택된 배우: 없음";
+            _selectedKeyframeLabel.Text = "선택된 키프레임: 없음";
             SetInputsEnabled(false);
             return;
         }
@@ -348,24 +384,27 @@ public sealed class TransformInspectorController : IDisposable
         try
         {
             var transform = _session.GetSelectedTransform()
-                ?? throw new InvalidOperationException("선택한 배우의 최초 변환 키프레임이 없습니다.");
-            _selectedActorLabel.Text = $"선택된 배우: {actorId} (최초 키프레임)";
-            SetInputs(transform.Position, transform.YawDegrees);
+                ?? throw new InvalidOperationException("선택한 변환 키프레임이 없습니다.");
+            _selectedActorLabel.Text = $"선택된 배우: {actorId}";
+            _selectedKeyframeLabel.Text = $"선택된 키프레임: {transform.Id} · {transform.TimeSeconds:0.###}초";
+            SetInputs(transform.TimeSeconds, transform.Position, transform.YawDegrees);
             SetInputsEnabled(_session.CanEditSelectedTransform);
         }
         catch (InvalidOperationException exception)
         {
             _selectedActorLabel.Text = "선택된 배우: 유효하지 않음";
+            _selectedKeyframeLabel.Text = "선택된 키프레임: 없음";
             SetInputsEnabled(false);
             ShowError($"선택한 배우가 더 이상 유효하지 않습니다: {exception.Message}");
         }
     }
 
-    private void SetInputs(Position3 position, double yawDegrees)
+    private void SetInputs(double timeSeconds, Position3 position, double yawDegrees)
     {
         _updatingInputs = true;
         try
         {
+            _timeInput.Value = timeSeconds;
             _xInput.Value = position.X;
             _yInput.Value = position.Y;
             _zInput.Value = position.Z;
@@ -379,6 +418,7 @@ public sealed class TransformInspectorController : IDisposable
 
     private void SetInputsEnabled(bool enabled)
     {
+        _timeInput.Editable = enabled;
         foreach (var input in _inputs)
         {
             input.Editable = enabled;
