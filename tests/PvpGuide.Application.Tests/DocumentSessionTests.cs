@@ -12,6 +12,392 @@ namespace PvpGuide.Application.Tests;
 public sealed class DocumentSessionTests
 {
     [Fact]
+    public void Action_and_lock_commands_share_one_monotonic_history()
+    {
+        var session = CreateSemanticSession(out var document);
+        session.SelectActor("host");
+
+        Assert.Equal(SceneEditResult.Applied,
+            session.AddActionKeyframeAtCurrentTime("attack"));
+        Assert.Equal(SceneEditResult.Applied,
+            session.AddLockOnKeyframeAtCurrentTime(
+                true, "invader", 0, LockOnTrackingMode.Continuous));
+
+        Assert.True(session.Undo());
+        Assert.True(session.Undo());
+        Assert.True(session.Redo());
+        Assert.True(session.Redo());
+        Assert.Equal(6, document.Revision);
+    }
+
+    [Fact]
+    public void Selecting_lock_marker_pauses_seeks_and_activates_lock_track()
+    {
+        var session = CreateSemanticSession(out _);
+        session.SelectActor("host");
+        session.Playback.Play();
+
+        Assert.Equal(SceneEditResult.Applied, session.SelectLockOnKeyframe("host-lock-1"));
+
+        Assert.False(session.Playback.IsPlaying);
+        Assert.Equal(1, session.Playback.CurrentTimeSeconds);
+        Assert.Equal(TimelineTrackKind.LockOn, session.ActiveTimelineTrack);
+        Assert.Equal("host-lock-1", session.SelectedLockOnKeyframeId);
+    }
+
+    [Fact]
+    public void Selecting_action_and_transform_markers_activates_their_tracks()
+    {
+        var session = CreateSemanticSession(out _);
+        session.SelectActor("host");
+        session.Playback.Play();
+
+        Assert.Equal(SceneEditResult.Applied, session.SelectActionKeyframe("host-action-1"));
+        Assert.False(session.Playback.IsPlaying);
+        Assert.Equal(1, session.Playback.CurrentTimeSeconds);
+        Assert.Equal(TimelineTrackKind.Action, session.ActiveTimelineTrack);
+
+        Assert.Equal(SceneEditResult.Applied, session.SelectTransformKeyframe("host-first"));
+        Assert.Equal(0, session.Playback.CurrentTimeSeconds);
+        Assert.Equal(TimelineTrackKind.Transform, session.ActiveTimelineTrack);
+    }
+
+    [Fact]
+    public void Semantic_CRUD_uses_deterministic_ids_and_reports_full_selection_payloads()
+    {
+        var session = CreateSemanticSession(out var document);
+        session.SelectActor("host");
+        ActionKeyframeSelectionChangedEventArgs? actionSelection = null;
+        LockOnKeyframeSelectionChangedEventArgs? lockSelection = null;
+        session.ActionKeyframeSelectionChanged += (_, args) => actionSelection = args;
+        session.LockOnKeyframeSelectionChanged += (_, args) => lockSelection = args;
+
+        Assert.Equal(SceneEditResult.Applied, session.AddActionKeyframeAtCurrentTime("attack"));
+        Assert.Equal("host-action-0001", session.SelectedActionKeyframeId);
+        Assert.Equal(TimelineTrackKind.Action, session.ActiveTimelineTrack);
+        AssertActionFrame(actionSelection!.Keyframe, "host-action-0001", 0, "attack");
+        Assert.Equal("host", actionSelection.ActorId);
+        Assert.Equal("host-action-0001", actionSelection.KeyframeId);
+
+        Assert.Equal(SceneEditResult.Applied, session.UpdateSelectedActionKeyframe(2, "roll"));
+        Assert.Equal(2, session.Playback.CurrentTimeSeconds);
+        AssertActionFrame(session.GetSelectedActionKeyframe(), "host-action-0001", 2, "roll");
+        Assert.Equal(SceneEditResult.Applied, session.RemoveSelectedActionKeyframe());
+        Assert.DoesNotContain(session.GetSelectedActorActionKeyframes(), frame => frame.Id == "host-action-0001");
+
+        Assert.True(session.Playback.Seek(0));
+        Assert.Equal(SceneEditResult.Applied, session.AddLockOnKeyframeAtCurrentTime(
+            true, "invader", 25, LockOnTrackingMode.KeyframeOnly));
+        Assert.Equal("host-lock-on-0001", session.SelectedLockOnKeyframeId);
+        Assert.Equal(TimelineTrackKind.LockOn, session.ActiveTimelineTrack);
+        AssertLockFrame(
+            lockSelection!.Keyframe,
+            "host-lock-on-0001",
+            0,
+            true,
+            "invader",
+            25,
+            LockOnTrackingMode.KeyframeOnly);
+
+        Assert.Equal(SceneEditResult.Applied, session.UpdateSelectedLockOnKeyframe(
+            2, false, null, -45, LockOnTrackingMode.Snap));
+        Assert.Equal(2, session.Playback.CurrentTimeSeconds);
+        AssertLockFrame(
+            session.GetSelectedLockOnKeyframe(),
+            "host-lock-on-0001",
+            2,
+            false,
+            null,
+            -45,
+            LockOnTrackingMode.Snap);
+        Assert.Equal(SceneEditResult.Applied, session.RemoveSelectedLockOnKeyframe());
+        Assert.DoesNotContain(session.GetSelectedActorLockOnKeyframes(), frame => frame.Id == "host-lock-on-0001");
+        Assert.Equal(6, document.Revision);
+    }
+
+    [Fact]
+    public void Semantic_tracks_allow_the_last_marker_to_be_deleted_and_restored()
+    {
+        var actionSession = CreateSemanticSession(out _);
+        actionSession.SelectActor("host");
+        Assert.Equal(SceneEditResult.Applied, actionSession.SelectActionKeyframe("host-action-1"));
+        Assert.True(actionSession.ActionEditAvailability.CanDelete);
+        Assert.Equal(SceneEditResult.Applied, actionSession.RemoveSelectedActionKeyframe());
+        Assert.Empty(actionSession.GetSelectedActorActionKeyframes());
+        Assert.Null(actionSession.SelectedActionKeyframeId);
+        Assert.True(actionSession.Undo());
+        AssertActionFrame(actionSession.GetSelectedActionKeyframe(), "host-action-1", 1, "idle");
+
+        var lockSession = CreateSemanticSession(out _);
+        lockSession.SelectActor("host");
+        Assert.Equal(SceneEditResult.Applied, lockSession.SelectLockOnKeyframe("host-lock-1"));
+        Assert.True(lockSession.LockOnEditAvailability.CanDelete);
+        Assert.Equal(SceneEditResult.Applied, lockSession.RemoveSelectedLockOnKeyframe());
+        Assert.Empty(lockSession.GetSelectedActorLockOnKeyframes());
+        Assert.Null(lockSession.SelectedLockOnKeyframeId);
+        Assert.True(lockSession.Undo());
+        AssertLockFrame(
+            lockSession.GetSelectedLockOnKeyframe(),
+            "host-lock-1",
+            1,
+            true,
+            "invader",
+            15,
+            LockOnTrackingMode.Snap);
+    }
+
+    [Fact]
+    public void Semantic_stale_updates_and_deletes_preserve_history_and_expose_latest_frames()
+    {
+        var actionSession = CreateSemanticSession(out var actionDocument);
+        actionSession.SelectActor("host");
+        Assert.Equal(SceneEditResult.Applied, actionSession.SelectActionKeyframe("host-action-1"));
+        var staleAction = Assert.IsType<ActionKeyframe>(actionSession.GetSelectedActionKeyframe());
+        var latestAction = new ActionKeyframe(staleAction.Id, 2, "external");
+        Assert.True(actionDocument.UpdateActionKeyframe("host", staleAction, latestAction));
+
+        Assert.Equal(SceneEditResult.Conflict, actionSession.UpdateSelectedActionKeyframe(3, "roll"));
+        Assert.Equal(SceneEditResult.Conflict, actionSession.RemoveSelectedActionKeyframe());
+        AssertActionFrame(actionSession.GetSelectedActionKeyframe(), "host-action-1", 2, "external");
+        Assert.False(actionSession.CanUndo);
+
+        var lockSession = CreateSemanticSession(out var lockDocument);
+        lockSession.SelectActor("host");
+        Assert.Equal(SceneEditResult.Applied, lockSession.SelectLockOnKeyframe("host-lock-1"));
+        var staleLock = Assert.IsType<LockOnKeyframe>(lockSession.GetSelectedLockOnKeyframe());
+        var latestLock = new LockOnKeyframe(
+            staleLock.Id, 2, false, null, 60, LockOnTrackingMode.KeyframeOnly);
+        Assert.True(lockDocument.UpdateLockOnKeyframe("host", staleLock, latestLock));
+
+        Assert.Equal(SceneEditResult.Conflict, lockSession.UpdateSelectedLockOnKeyframe(
+            3, true, "invader", 90, LockOnTrackingMode.Continuous));
+        Assert.Equal(SceneEditResult.Conflict, lockSession.RemoveSelectedLockOnKeyframe());
+        AssertLockFrame(
+            lockSession.GetSelectedLockOnKeyframe(),
+            "host-lock-1",
+            2,
+            false,
+            null,
+            60,
+            LockOnTrackingMode.KeyframeOnly);
+        Assert.False(lockSession.CanUndo);
+    }
+
+    [Fact]
+    public void Semantic_availability_and_shared_history_require_a_paused_selected_actor()
+    {
+        var session = CreateSemanticSession(out var document);
+        session.SelectActor("host");
+        Assert.True(session.ActionEditAvailability.CanAdd);
+        Assert.False(session.ActionEditAvailability.CanUpdate);
+        Assert.True(session.LockOnEditAvailability.CanAdd);
+        Assert.True(session.CanEditHistory);
+        Assert.Equal(SceneEditResult.Applied, session.AddActionKeyframeAtCurrentTime("attack"));
+
+        Assert.True(session.Playback.Play());
+        Assert.False(session.ActionEditAvailability.CanAdd);
+        Assert.False(session.ActionEditAvailability.CanUpdate);
+        Assert.False(session.ActionEditAvailability.CanDelete);
+        Assert.False(session.LockOnEditAvailability.CanAdd);
+        Assert.False(session.CanEditHistory);
+        var revision = document.Revision;
+        Assert.False(session.Undo());
+        Assert.Equal(SceneEditResult.Conflict, session.AddLockOnKeyframeAtCurrentTime(
+            true, "invader", 0, LockOnTrackingMode.Continuous));
+        Assert.Equal(revision, document.Revision);
+
+        Assert.True(session.Playback.Pause());
+        session.SelectActor(null);
+        Assert.False(session.CanEditHistory);
+        Assert.False(session.Undo());
+        Assert.True(session.CanUndo);
+    }
+
+    [Fact]
+    public void Semantic_changed_observer_exceptions_commit_history_and_reconcile_latest_selections()
+    {
+        var actionSession = CreateSemanticSession(out var actionDocument);
+        actionSession.SelectActor("host");
+        var actionObserver = new EventHandler<SceneDocumentChangedEventArgs>((_, _) => throw new ChangedObserverException());
+        actionDocument.Changed += actionObserver;
+
+        Assert.Throws<ChangedObserverException>(() => actionSession.AddActionKeyframeAtCurrentTime("attack"));
+
+        actionDocument.Changed -= actionObserver;
+        Assert.True(actionSession.CanUndo);
+        Assert.Equal(
+            actionDocument.GetActionKeyframe("host", actionSession.SelectedActionKeyframeId!),
+            actionSession.GetSelectedActionKeyframe());
+
+        var updateSession = CreateSemanticSession(out var updateDocument);
+        updateSession.SelectActor("host");
+        Assert.Equal(SceneEditResult.Applied, updateSession.SelectLockOnKeyframe("host-lock-1"));
+        var updateObserver = new EventHandler<SceneDocumentChangedEventArgs>((_, _) => throw new ChangedObserverException());
+        updateDocument.Changed += updateObserver;
+        Assert.Throws<ChangedObserverException>(() => updateSession.UpdateSelectedLockOnKeyframe(
+            2, false, null, 75, LockOnTrackingMode.KeyframeOnly));
+        updateDocument.Changed -= updateObserver;
+        Assert.True(updateSession.CanUndo);
+        Assert.Equal(
+            updateDocument.GetLockOnKeyframe("host", updateSession.SelectedLockOnKeyframeId!),
+            updateSession.GetSelectedLockOnKeyframe());
+
+        var deleteSession = CreateSemanticSession(out var deleteDocument);
+        deleteSession.SelectActor("host");
+        Assert.Equal(SceneEditResult.Applied, deleteSession.SelectLockOnKeyframe("host-lock-1"));
+        var deleteObserver = new EventHandler<SceneDocumentChangedEventArgs>((_, _) => throw new ChangedObserverException());
+        deleteDocument.Changed += deleteObserver;
+        Assert.Throws<ChangedObserverException>(() => deleteSession.RemoveSelectedLockOnKeyframe());
+        deleteDocument.Changed -= deleteObserver;
+        Assert.True(deleteSession.CanUndo);
+        Assert.Empty(deleteSession.GetSelectedActorLockOnKeyframes());
+        Assert.Null(deleteSession.GetSelectedLockOnKeyframe());
+    }
+
+    [Fact]
+    public void Semantic_history_changed_can_reentrantly_undo_and_redo_without_stale_state()
+    {
+        var actionSession = CreateSemanticSession(out var actionDocument);
+        actionSession.SelectActor("host");
+        var undoRan = false;
+        actionSession.HistoryChanged += (_, _) =>
+        {
+            if (!undoRan)
+            {
+                undoRan = true;
+                Assert.True(actionSession.Undo());
+            }
+        };
+
+        Assert.Equal(SceneEditResult.Applied, actionSession.AddActionKeyframeAtCurrentTime("attack"));
+
+        Assert.DoesNotContain(actionSession.GetSelectedActorActionKeyframes(),
+            frame => frame.Id == "host-action-0001");
+        Assert.False(actionSession.CanUndo);
+        Assert.True(actionSession.CanRedo);
+        Assert.Equal(2, actionDocument.Revision);
+
+        var lockSession = CreateSemanticSession(out var lockDocument);
+        lockSession.SelectActor("host");
+        Assert.Equal(SceneEditResult.Applied, lockSession.AddLockOnKeyframeAtCurrentTime(
+            true, "invader", 0, LockOnTrackingMode.Continuous));
+        var redoRan = false;
+        lockSession.HistoryChanged += (_, _) =>
+        {
+            if (!redoRan)
+            {
+                redoRan = true;
+                Assert.True(lockSession.Redo());
+            }
+        };
+
+        Assert.True(lockSession.Undo());
+
+        Assert.Contains(lockSession.GetSelectedActorLockOnKeyframes(),
+            frame => frame.Id == "host-lock-on-0001");
+        Assert.True(lockSession.CanUndo);
+        Assert.False(lockSession.CanRedo);
+        Assert.Equal(3, lockDocument.Revision);
+    }
+
+    [Fact]
+    public void Lock_selection_playback_reentrancy_publishes_only_latest_full_frame_and_availability()
+    {
+        var session = CreateSemanticSession(out var document);
+        session.SelectActor("host");
+        var observedSelection = new List<LockOnKeyframeSelectionChangedEventArgs>();
+        var observedAvailability = new List<TimelineEditAvailabilityChangedEventArgs>();
+        session.LockOnKeyframeSelectionChanged += (_, args) =>
+        {
+            observedSelection.Add(args);
+            Assert.Equal(session.SelectedActorId, args.ActorId);
+            Assert.Equal(session.SelectedLockOnKeyframeId, args.KeyframeId);
+            Assert.Equal(document.GetLockOnKeyframe(args.ActorId!, args.KeyframeId!), args.Keyframe);
+        };
+        session.TimelineEditAvailabilityChanged += (_, args) =>
+        {
+            observedAvailability.Add(args);
+            Assert.Equal(session.ActionEditAvailability, args.ActionEditAvailability);
+            Assert.Equal(session.LockOnEditAvailability, args.LockOnEditAvailability);
+        };
+        var callbackRan = false;
+        session.Playback.Changed += (_, _) =>
+        {
+            if (callbackRan || session.Playback.IsPlaying)
+            {
+                return;
+            }
+
+            callbackRan = true;
+            var before = document.GetLockOnKeyframe("host", "host-lock-1");
+            Assert.True(document.UpdateLockOnKeyframe(
+                "host",
+                before,
+                new LockOnKeyframe(
+                    before.Id,
+                    2,
+                    false,
+                    null,
+                    70,
+                    LockOnTrackingMode.KeyframeOnly)));
+            Assert.True(session.Playback.Seek(2));
+        };
+        Assert.True(session.Playback.Play());
+
+        Assert.Equal(SceneEditResult.Applied, session.SelectLockOnKeyframe("host-lock-1"));
+
+        Assert.True(callbackRan);
+        Assert.False(session.Playback.IsPlaying);
+        Assert.Equal(2, session.Playback.CurrentTimeSeconds);
+        AssertLockFrame(
+            session.GetSelectedLockOnKeyframe(),
+            "host-lock-1",
+            2,
+            false,
+            null,
+            70,
+            LockOnTrackingMode.KeyframeOnly);
+        Assert.NotEmpty(observedSelection);
+        Assert.NotEmpty(observedAvailability);
+    }
+
+    [Fact]
+    public void Action_fallback_reconciliation_reseeks_when_playback_observer_moves_the_fallback_frame()
+    {
+        var session = CreateSemanticSession(out var document);
+        session.SelectActor("host");
+        Assert.Equal(SceneEditResult.Applied, session.AddActionKeyframeAtCurrentTime("attack"));
+        var observedSelections = new List<ActionKeyframeSelectionChangedEventArgs>();
+        session.ActionKeyframeSelectionChanged += (_, args) => observedSelections.Add(args);
+        var observerRan = false;
+        ActionKeyframe? latestFallback = null;
+        session.Playback.Changed += (_, _) =>
+        {
+            if (observerRan || session.Playback.CurrentTimeSeconds != 1)
+            {
+                return;
+            }
+
+            observerRan = true;
+            var fallback = document.GetActionKeyframe("host", "host-action-1");
+            latestFallback = new ActionKeyframe(fallback.Id, 2, "observer-updated-idle");
+            Assert.True(document.UpdateActionKeyframe("host", fallback, latestFallback));
+        };
+
+        Assert.Equal(SceneEditResult.Applied, session.RemoveSelectedActionKeyframe());
+
+        Assert.True(observerRan);
+        Assert.Equal(2, session.Playback.CurrentTimeSeconds);
+        Assert.Equal("host-action-1", session.SelectedActionKeyframeId);
+        Assert.Same(latestFallback, session.GetSelectedActionKeyframe());
+        Assert.Same(latestFallback, observedSelections[^1].Keyframe);
+        Assert.False(session.ActionEditAvailability.CanAdd);
+        Assert.True(session.ActionEditAvailability.CanUpdate);
+        Assert.True(session.ActionEditAvailability.CanDelete);
+        Assert.Equal(3, document.Revision);
+    }
+
+    [Fact]
     public void Selected_actor_is_editable_only_while_paused_at_its_selected_keyframe_time()
     {
         var session = CreateQuarterSecondSession(out _);
@@ -1179,6 +1565,36 @@ public sealed class DocumentSessionTests
         };
     }
 
+    private static void AssertActionFrame(
+        ActionKeyframe? frame,
+        string id,
+        double timeSeconds,
+        string actionKey)
+    {
+        var actual = Assert.IsType<ActionKeyframe>(frame);
+        Assert.Equal(id, actual.Id);
+        Assert.Equal(timeSeconds, actual.TimeSeconds);
+        Assert.Equal(actionKey, actual.ActionKey);
+    }
+
+    private static void AssertLockFrame(
+        LockOnKeyframe? frame,
+        string id,
+        double timeSeconds,
+        bool enabled,
+        string? targetActorId,
+        double yawOffsetDegrees,
+        LockOnTrackingMode trackingMode)
+    {
+        var actual = Assert.IsType<LockOnKeyframe>(frame);
+        Assert.Equal(id, actual.Id);
+        Assert.Equal(timeSeconds, actual.TimeSeconds);
+        Assert.Equal(enabled, actual.Enabled);
+        Assert.Equal(targetActorId, actual.TargetActorId);
+        Assert.Equal(yawOffsetDegrees, actual.YawOffsetDegrees);
+        Assert.Equal(trackingMode, actual.TrackingMode);
+    }
+
     private static DocumentSession CreateSession(out SceneDocument document)
     {
         document = SceneDocument.Create(
@@ -1203,6 +1619,39 @@ public sealed class DocumentSessionTests
                     "Target",
                     "Enemy",
                     [new TransformKeyframe("target-first", 1, new Position3(7, 0, 8), 180)],
+                    [],
+                    [])
+            ]);
+        return new DocumentSession(document);
+    }
+
+    private static DocumentSession CreateSemanticSession(out SceneDocument document)
+    {
+        document = SceneDocument.Create(
+            "semantic-document",
+            "Semantic timeline",
+            null,
+            10,
+            30,
+            [
+                new ActorTrack(
+                    "host",
+                    "Host",
+                    "Hero",
+                    [new TransformKeyframe("host-first", 0, new Position3(1, 2, 3), 10)],
+                    [new ActionKeyframe("host-action-1", 1, "idle")],
+                    [new LockOnKeyframe(
+                        "host-lock-1",
+                        1,
+                        true,
+                        "invader",
+                        15,
+                        LockOnTrackingMode.Snap)]),
+                new ActorTrack(
+                    "invader",
+                    "Invader",
+                    "Enemy",
+                    [new TransformKeyframe("invader-first", 0, new Position3(7, 0, 8), 180)],
                     [],
                     [])
             ]);

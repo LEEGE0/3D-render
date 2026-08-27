@@ -10,18 +10,25 @@ namespace PvpGuide.Application.Sessions;
 public sealed class DocumentSession
 {
     private const double EditTimeToleranceSeconds = 0.000000001;
+    private const int MaxReconciliationAttempts = 32;
     private const string NoSelectionLockReason = "배우를 선택해야 편집할 수 있습니다";
     private const string PlayingLockReason = "재생 중에는 편집할 수 없습니다";
     private const string SelectedKeyframeTimeLockReason = "선택한 키프레임 시각에서만 편집할 수 있습니다";
     private const string ExistingKeyframeTimeLockReason = "현재 시각에는 이미 변환 키프레임이 있습니다";
     private const string NoTransformKeyframeLockReason = "변환 키프레임을 선택해야 편집할 수 있습니다";
     private const string LastTransformKeyframeLockReason = "마지막 변환 키프레임은 삭제할 수 없습니다";
+    private const string ExistingActionKeyframeTimeLockReason = "현재 시각에는 이미 액션 키프레임이 있습니다";
+    private const string ExistingLockOnKeyframeTimeLockReason = "현재 시각에는 이미 Lock-on 키프레임이 있습니다";
+    private const string NoActionKeyframeLockReason = "액션 키프레임을 선택해야 편집할 수 있습니다";
+    private const string NoLockOnKeyframeLockReason = "Lock-on 키프레임을 선택해야 편집할 수 있습니다";
     private readonly SceneDocument _document;
     private readonly Stack<ISceneEditCommand> _undoStack = [];
     private readonly Stack<ISceneEditCommand> _redoStack = [];
     private TransformKeyframe? _previewStart;
     private TransformPreview? _preview;
     private TransformKeyframe? _selectedTransformKeyframe;
+    private ActionKeyframe? _selectedActionKeyframe;
+    private LockOnKeyframe? _selectedLockOnKeyframe;
 
     public DocumentSession(SceneDocument document)
     {
@@ -37,6 +44,12 @@ public sealed class DocumentSession
 
     public string? SelectedTransformKeyframeId { get; private set; }
 
+    public string? SelectedActionKeyframeId { get; private set; }
+
+    public string? SelectedLockOnKeyframeId { get; private set; }
+
+    public TimelineTrackKind ActiveTimelineTrack { get; private set; }
+
     public PlaybackClock Playback { get; }
 
     public bool CanEditSelectedTransform { get; private set; }
@@ -50,6 +63,14 @@ public sealed class DocumentSession
     public bool CanDeleteSelectedTransformKeyframe { get; private set; }
 
     public string? DeleteTransformKeyframeLockReason { get; private set; }
+
+    public TimelineTrackEditAvailability ActionEditAvailability { get; private set; } =
+        new(false, NoSelectionLockReason, false, NoSelectionLockReason, false, NoSelectionLockReason);
+
+    public TimelineTrackEditAvailability LockOnEditAvailability { get; private set; } =
+        new(false, NoSelectionLockReason, false, NoSelectionLockReason, false, NoSelectionLockReason);
+
+    public bool CanEditHistory => SelectedActorId is not null && !Playback.IsPlaying;
 
     public bool CanUndo => _undoStack.Count > 0;
 
@@ -70,9 +91,15 @@ public sealed class DocumentSession
 
     public event EventHandler<TransformKeyframeSelectionChangedEventArgs>? TransformKeyframeSelectionChanged;
 
+    public event EventHandler<ActionKeyframeSelectionChangedEventArgs>? ActionKeyframeSelectionChanged;
+
+    public event EventHandler<LockOnKeyframeSelectionChangedEventArgs>? LockOnKeyframeSelectionChanged;
+
     public event EventHandler<TransformPreviewChangedEventArgs>? PreviewChanged;
 
     public event EventHandler<EditAvailabilityChangedEventArgs>? EditAvailabilityChanged;
+
+    public event EventHandler<TimelineEditAvailabilityChangedEventArgs>? TimelineEditAvailabilityChanged;
 
     public event EventHandler? HistoryChanged;
 
@@ -98,9 +125,17 @@ public sealed class DocumentSession
 
         ClearPreview();
         SelectedActorId = actorId;
-        var keyframeSelectionChange = RefreshSelectedTransformKeyframeAtCurrentTime(forceNotification: true);
-        UpdateEditAvailability();
-        RaiseTransformKeyframeSelectionChanged(keyframeSelectionChange);
+        ActiveTimelineTrack = TimelineTrackKind.Transform;
+        var transformSelectionChange = RefreshSelectedTransformKeyframeAtCurrentTime(forceNotification: true);
+        var actionSelectionChange = RefreshSelectedActionKeyframeAtCurrentTime(forceNotification: true);
+        var lockOnSelectionChange = RefreshSelectedLockOnKeyframeAtCurrentTime(forceNotification: true);
+        var availabilityChanges = RefreshAllEditAvailabilityState();
+        RaiseAllSelectionAndAvailabilityChanged(
+            transformSelectionChange,
+            actionSelectionChange,
+            lockOnSelectionChange,
+            availabilityChanges.Transform,
+            availabilityChanges.Timeline);
         SelectionChanged?.Invoke(this, new SelectionChangedEventArgs(SelectedActorId));
     }
 
@@ -118,6 +153,34 @@ public sealed class DocumentSession
     public IReadOnlyList<TransformKeyframe> GetSelectedActorTransformKeyframes() =>
         GetSelectedActor()?.TransformKeyframes.ToArray() ?? [];
 
+    public ActionKeyframe? GetSelectedActionKeyframe()
+    {
+        if (SelectedActorId is null || SelectedActionKeyframeId is null)
+        {
+            return null;
+        }
+
+        return GetSelectedActor()?.ActionKeyframes
+            .SingleOrDefault(frame => frame.Id == SelectedActionKeyframeId);
+    }
+
+    public LockOnKeyframe? GetSelectedLockOnKeyframe()
+    {
+        if (SelectedActorId is null || SelectedLockOnKeyframeId is null)
+        {
+            return null;
+        }
+
+        return GetSelectedActor()?.LockOnKeyframes
+            .SingleOrDefault(frame => frame.Id == SelectedLockOnKeyframeId);
+    }
+
+    public IReadOnlyList<ActionKeyframe> GetSelectedActorActionKeyframes() =>
+        GetSelectedActor()?.ActionKeyframes.ToArray() ?? [];
+
+    public IReadOnlyList<LockOnKeyframe> GetSelectedActorLockOnKeyframes() =>
+        GetSelectedActor()?.LockOnKeyframes.ToArray() ?? [];
+
     public SceneEditResult SelectTransformKeyframe(string keyframeId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
@@ -131,9 +194,98 @@ public sealed class DocumentSession
         ClearPreview();
         Playback.Pause();
         Playback.Seek(keyframe.TimeSeconds);
+        ActiveTimelineTrack = TimelineTrackKind.Transform;
         var keyframeSelectionChange = SetSelectedTransformKeyframe(keyframe);
         UpdateEditAvailability();
         RaiseTransformKeyframeSelectionChanged(keyframeSelectionChange);
+        return SceneEditResult.Applied;
+    }
+
+    public SceneEditResult SelectActionKeyframe(string keyframeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
+        var actorId = SelectedActorId;
+        var keyframe = GetSelectedActor()?.ActionKeyframes.SingleOrDefault(frame => frame.Id == keyframeId);
+        if (actorId is null || keyframe is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        ClearPreview();
+        Playback.Pause();
+        keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
+        if (keyframe is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        Playback.Seek(keyframe.TimeSeconds);
+        keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
+        if (keyframe is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        if (Math.Abs(Playback.CurrentTimeSeconds - keyframe.TimeSeconds) > EditTimeToleranceSeconds)
+        {
+            Playback.Seek(keyframe.TimeSeconds);
+            keyframe = GetCurrentActionKeyframe(actorId, keyframeId);
+            if (keyframe is null)
+            {
+                return SceneEditResult.Conflict;
+            }
+        }
+
+        ActiveTimelineTrack = TimelineTrackKind.Action;
+        var selectionChange = SetSelectedActionKeyframe(keyframe);
+        var availabilityChanges = RefreshAllEditAvailabilityState();
+        RaiseActionKeyframeSelectionChanged(selectionChange);
+        RaiseEditAvailabilityChanged(availabilityChanges.Transform);
+        RaiseTimelineEditAvailabilityChanged(availabilityChanges.Timeline);
+        return SceneEditResult.Applied;
+    }
+
+    public SceneEditResult SelectLockOnKeyframe(string keyframeId)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyframeId);
+        var actorId = SelectedActorId;
+        var keyframe = GetSelectedActor()?.LockOnKeyframes.SingleOrDefault(frame => frame.Id == keyframeId);
+        if (actorId is null || keyframe is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        ClearPreview();
+        Playback.Pause();
+        keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
+        if (keyframe is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        Playback.Seek(keyframe.TimeSeconds);
+        keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
+        if (keyframe is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        if (Math.Abs(Playback.CurrentTimeSeconds - keyframe.TimeSeconds) > EditTimeToleranceSeconds)
+        {
+            Playback.Seek(keyframe.TimeSeconds);
+            keyframe = GetCurrentLockOnKeyframe(actorId, keyframeId);
+            if (keyframe is null)
+            {
+                return SceneEditResult.Conflict;
+            }
+        }
+
+        ActiveTimelineTrack = TimelineTrackKind.LockOn;
+        var selectionChange = SetSelectedLockOnKeyframe(keyframe);
+        var availabilityChanges = RefreshAllEditAvailabilityState();
+        RaiseLockOnKeyframeSelectionChanged(selectionChange);
+        RaiseEditAvailabilityChanged(availabilityChanges.Transform);
+        RaiseTimelineEditAvailabilityChanged(availabilityChanges.Timeline);
         return SceneEditResult.Applied;
     }
 
@@ -218,6 +370,167 @@ public sealed class DocumentSession
         return SceneEditResult.Applied;
     }
 
+    public SceneEditResult AddActionKeyframeAtCurrentTime(string actionKey)
+    {
+        if (!ActionEditAvailability.CanAdd || SelectedActorId is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        var actor = GetSelectedActor();
+        if (actor is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        ActionKeyframe keyframe;
+        try
+        {
+            keyframe = new ActionKeyframe(
+                GetNextActionKeyframeId(actor),
+                Playback.CurrentTimeSeconds,
+                actionKey);
+        }
+        catch (ArgumentException)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        ClearPreview();
+        return ExecuteCommandOnTrack(
+            TimelineTrackKind.Action,
+            new AddActionKeyframeCommand(SelectedActorId, keyframe));
+    }
+
+    public SceneEditResult UpdateSelectedActionKeyframe(double timeSeconds, string actionKey)
+    {
+        if (!ActionEditAvailability.CanUpdate || SelectedActorId is null || _selectedActionKeyframe is null ||
+            !double.IsFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > _document.DurationSeconds)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        var before = _selectedActionKeyframe;
+        ActionKeyframe after;
+        try
+        {
+            after = new ActionKeyframe(before.Id, timeSeconds, actionKey);
+        }
+        catch (ArgumentException)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        ClearPreview();
+        return ExecuteCommandOnTrack(
+            TimelineTrackKind.Action,
+            new UpdateActionKeyframeCommand(SelectedActorId, before, after));
+    }
+
+    public SceneEditResult RemoveSelectedActionKeyframe()
+    {
+        if (!ActionEditAvailability.CanDelete || SelectedActorId is null || _selectedActionKeyframe is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        var before = _selectedActionKeyframe;
+        ClearPreview();
+        return ExecuteCommandOnTrack(
+            TimelineTrackKind.Action,
+            new RemoveActionKeyframeCommand(SelectedActorId, before));
+    }
+
+    public SceneEditResult AddLockOnKeyframeAtCurrentTime(
+        bool enabled,
+        string? targetActorId,
+        double yawOffsetDegrees,
+        LockOnTrackingMode trackingMode)
+    {
+        if (!LockOnEditAvailability.CanAdd || SelectedActorId is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        var actor = GetSelectedActor();
+        if (actor is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        LockOnKeyframe keyframe;
+        try
+        {
+            keyframe = new LockOnKeyframe(
+                GetNextLockOnKeyframeId(actor),
+                Playback.CurrentTimeSeconds,
+                enabled,
+                targetActorId,
+                yawOffsetDegrees,
+                trackingMode);
+        }
+        catch (ArgumentException)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        ClearPreview();
+        return ExecuteCommandOnTrack(
+            TimelineTrackKind.LockOn,
+            new AddLockOnKeyframeCommand(SelectedActorId, keyframe));
+    }
+
+    public SceneEditResult UpdateSelectedLockOnKeyframe(
+        double timeSeconds,
+        bool enabled,
+        string? targetActorId,
+        double yawOffsetDegrees,
+        LockOnTrackingMode trackingMode)
+    {
+        if (!LockOnEditAvailability.CanUpdate || SelectedActorId is null || _selectedLockOnKeyframe is null ||
+            !double.IsFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > _document.DurationSeconds ||
+            !double.IsFinite(yawOffsetDegrees))
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        var before = _selectedLockOnKeyframe;
+        LockOnKeyframe after;
+        try
+        {
+            after = new LockOnKeyframe(
+                before.Id,
+                timeSeconds,
+                enabled,
+                targetActorId,
+                yawOffsetDegrees,
+                trackingMode);
+        }
+        catch (ArgumentException)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        ClearPreview();
+        return ExecuteCommandOnTrack(
+            TimelineTrackKind.LockOn,
+            new UpdateLockOnKeyframeCommand(SelectedActorId, before, after));
+    }
+
+    public SceneEditResult RemoveSelectedLockOnKeyframe()
+    {
+        if (!LockOnEditAvailability.CanDelete || SelectedActorId is null || _selectedLockOnKeyframe is null)
+        {
+            return SceneEditResult.Conflict;
+        }
+
+        var before = _selectedLockOnKeyframe;
+        ClearPreview();
+        return ExecuteCommandOnTrack(
+            TimelineTrackKind.LockOn,
+            new RemoveLockOnKeyframeCommand(SelectedActorId, before));
+    }
+
     public bool MoveSelectedActor(Position3 destination)
     {
         if (!CanEditSelectedTransform)
@@ -259,7 +572,7 @@ public sealed class DocumentSession
 
     public bool Undo()
     {
-        if (_undoStack.Count == 0)
+        if (!CanEditHistory || _undoStack.Count == 0)
         {
             return false;
         }
@@ -277,7 +590,7 @@ public sealed class DocumentSession
 
     public bool Redo()
     {
-        if (_redoStack.Count == 0)
+        if (!CanEditHistory || _redoStack.Count == 0)
         {
             return false;
         }
@@ -364,6 +677,19 @@ public sealed class DocumentSession
             SelectedActorId!,
             before,
             new TransformKeyframe(before.Id, before.TimeSeconds, position, yawDegrees)));
+
+    private SceneEditResult ExecuteCommandOnTrack(TimelineTrackKind track, ISceneEditCommand command)
+    {
+        var previousTrack = ActiveTimelineTrack;
+        ActiveTimelineTrack = track;
+        var result = ExecuteCommandDetailed(command);
+        if (result != SceneEditResult.Applied)
+        {
+            ActiveTimelineTrack = previousTrack;
+        }
+
+        return result;
+    }
 
     private SceneEditResult TryExecuteDetailed(
         ISceneEditCommand command,
@@ -467,17 +793,19 @@ public sealed class DocumentSession
         }
         catch (Exception historyException)
         {
-            CompleteMutationExceptionTransition(historyException, ReconcileSelectedTransformKeyframeAfterMutation);
+            CompleteMutationExceptionTransition(historyException, ReconcileAllSelectedKeyframesAfterMutation);
             throw;
         }
 
-        ReconcileSelectedTransformKeyframeAfterMutation();
+        ReconcileAllSelectedKeyframesAfterMutation();
     }
 
     private void OnPlaybackChanged(object? sender, PlaybackChangedEventArgs args)
     {
-        var keyframeSelectionChange = RefreshSelectedTransformKeyframeAtCurrentTime();
-        var availabilityChange = RefreshEditAvailabilityState();
+        var transformSelectionChange = RefreshSelectedTransformKeyframeAtCurrentTime();
+        var actionSelectionChange = RefreshSelectedActionKeyframeAtCurrentTime();
+        var lockOnSelectionChange = RefreshSelectedLockOnKeyframeAtCurrentTime();
+        var availabilityChanges = RefreshAllEditAvailabilityState();
         try
         {
             ClearPreview();
@@ -486,21 +814,37 @@ public sealed class DocumentSession
         {
             CompleteMutationExceptionTransition(
                 exception,
-                () => RaiseSelectionAndEditAvailabilityChanged(keyframeSelectionChange, availabilityChange));
+                () => RaiseAllSelectionAndAvailabilityChanged(
+                    transformSelectionChange,
+                    actionSelectionChange,
+                    lockOnSelectionChange,
+                    availabilityChanges.Transform,
+                    availabilityChanges.Timeline));
             throw;
         }
 
-        RaiseSelectionAndEditAvailabilityChanged(keyframeSelectionChange, availabilityChange);
+        RaiseAllSelectionAndAvailabilityChanged(
+            transformSelectionChange,
+            actionSelectionChange,
+            lockOnSelectionChange,
+            availabilityChanges.Transform,
+            availabilityChanges.Timeline);
     }
 
     private void UpdateEditAvailability(bool raiseEvent = true)
     {
-        var availabilityChange = RefreshEditAvailabilityState();
+        var availabilityChanges = RefreshAllEditAvailabilityState();
         if (raiseEvent)
         {
-            RaiseEditAvailabilityChanged(availabilityChange);
+            RaiseEditAvailabilityChanged(availabilityChanges.Transform);
+            RaiseTimelineEditAvailabilityChanged(availabilityChanges.Timeline);
         }
     }
+
+    private (
+        EditAvailabilityChangedEventArgs? Transform,
+        TimelineEditAvailabilityChangedEventArgs? Timeline) RefreshAllEditAvailabilityState() =>
+        (RefreshEditAvailabilityState(), RefreshTimelineEditAvailabilityState());
 
     private EditAvailabilityChangedEventArgs? RefreshEditAvailabilityState()
     {
@@ -531,6 +875,31 @@ public sealed class DocumentSession
         }
     }
 
+    private TimelineEditAvailabilityChangedEventArgs? RefreshTimelineEditAvailabilityState()
+    {
+        var action = GetActionEditAvailability();
+        var lockOn = GetLockOnEditAvailability();
+        if (ActionEditAvailability == action && LockOnEditAvailability == lockOn)
+        {
+            return null;
+        }
+
+        ActionEditAvailability = action;
+        LockOnEditAvailability = lockOn;
+        return new TimelineEditAvailabilityChangedEventArgs(action, lockOn);
+    }
+
+    private void RaiseTimelineEditAvailabilityChanged(
+        TimelineEditAvailabilityChangedEventArgs? availabilityChange)
+    {
+        if (availabilityChange is not null &&
+            availabilityChange.ActionEditAvailability == ActionEditAvailability &&
+            availabilityChange.LockOnEditAvailability == LockOnEditAvailability)
+        {
+            TimelineEditAvailabilityChanged?.Invoke(this, availabilityChange);
+        }
+    }
+
     private (bool CanEdit, string? Reason) GetEditAvailability()
     {
         if (SelectedActorId is null)
@@ -547,6 +916,64 @@ public sealed class DocumentSession
         return selected is not null && Math.Abs(Playback.CurrentTimeSeconds - selected.TimeSeconds) <= EditTimeToleranceSeconds
             ? (true, null)
             : (false, SelectedKeyframeTimeLockReason);
+    }
+
+    private TimelineTrackEditAvailability GetActionEditAvailability() =>
+        GetTimelineTrackEditAvailability(
+            GetSelectedActor()?.ActionKeyframes.Select(frame => frame.TimeSeconds),
+            GetSelectedActionKeyframe()?.TimeSeconds,
+            ExistingActionKeyframeTimeLockReason,
+            NoActionKeyframeLockReason);
+
+    private TimelineTrackEditAvailability GetLockOnEditAvailability() =>
+        GetTimelineTrackEditAvailability(
+            GetSelectedActor()?.LockOnKeyframes.Select(frame => frame.TimeSeconds),
+            GetSelectedLockOnKeyframe()?.TimeSeconds,
+            ExistingLockOnKeyframeTimeLockReason,
+            NoLockOnKeyframeLockReason);
+
+    private TimelineTrackEditAvailability GetTimelineTrackEditAvailability(
+        IEnumerable<double>? frameTimes,
+        double? selectedTimeSeconds,
+        string existingTimeReason,
+        string noKeyframeReason)
+    {
+        if (SelectedActorId is null || frameTimes is null)
+        {
+            return new TimelineTrackEditAvailability(
+                false,
+                NoSelectionLockReason,
+                false,
+                NoSelectionLockReason,
+                false,
+                NoSelectionLockReason);
+        }
+
+        if (Playback.IsPlaying)
+        {
+            return new TimelineTrackEditAvailability(
+                false,
+                PlayingLockReason,
+                false,
+                PlayingLockReason,
+                false,
+                PlayingLockReason);
+        }
+
+        var hasFrameAtCurrentTime = frameTimes.Any(timeSeconds =>
+            Math.Abs(timeSeconds - Playback.CurrentTimeSeconds) <= EditTimeToleranceSeconds);
+        var selectionIsAtCurrentTime = selectedTimeSeconds is not null &&
+            Math.Abs(selectedTimeSeconds.Value - Playback.CurrentTimeSeconds) <= EditTimeToleranceSeconds;
+        var selectionReason = selectedTimeSeconds is null
+            ? noKeyframeReason
+            : SelectedKeyframeTimeLockReason;
+        return new TimelineTrackEditAvailability(
+            !hasFrameAtCurrentTime,
+            hasFrameAtCurrentTime ? existingTimeReason : null,
+            selectionIsAtCurrentTime,
+            selectionIsAtCurrentTime ? null : selectionReason,
+            selectionIsAtCurrentTime,
+            selectionIsAtCurrentTime ? null : selectionReason);
     }
 
     private ActorTrack? GetSelectedActor() => SelectedActorId is null
@@ -567,7 +994,10 @@ public sealed class DocumentSession
         bool forceNotification = false)
     {
         var keyframeId = keyframe?.Id;
-        if (!forceNotification && SelectedTransformKeyframeId == keyframeId)
+        if (!forceNotification &&
+            SelectedTransformKeyframeId == keyframeId &&
+            ((_selectedTransformKeyframe is null && keyframe is null) ||
+             SameTransform(_selectedTransformKeyframe, keyframe)))
         {
             _selectedTransformKeyframe = keyframe;
             return null;
@@ -576,6 +1006,62 @@ public sealed class DocumentSession
         SelectedTransformKeyframeId = keyframeId;
         _selectedTransformKeyframe = keyframe;
         return new TransformKeyframeSelectionChangedEventArgs(SelectedActorId, keyframeId, keyframe);
+    }
+
+    private ActionKeyframeSelectionChangedEventArgs? RefreshSelectedActionKeyframeAtCurrentTime(
+        bool forceNotification = false)
+    {
+        var actor = GetSelectedActor();
+        var keyframe = actor?.ActionKeyframes.SingleOrDefault(frame =>
+            Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds) <= EditTimeToleranceSeconds);
+        return SetSelectedActionKeyframe(keyframe, forceNotification);
+    }
+
+    private LockOnKeyframeSelectionChangedEventArgs? RefreshSelectedLockOnKeyframeAtCurrentTime(
+        bool forceNotification = false)
+    {
+        var actor = GetSelectedActor();
+        var keyframe = actor?.LockOnKeyframes.SingleOrDefault(frame =>
+            Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds) <= EditTimeToleranceSeconds);
+        return SetSelectedLockOnKeyframe(keyframe, forceNotification);
+    }
+
+    private ActionKeyframeSelectionChangedEventArgs? SetSelectedActionKeyframe(
+        ActionKeyframe? keyframe,
+        bool forceNotification = false)
+    {
+        var keyframeId = keyframe?.Id;
+        if (!forceNotification &&
+            SelectedActionKeyframeId == keyframeId &&
+            ((_selectedActionKeyframe is null && keyframe is null) ||
+             SameAction(_selectedActionKeyframe, keyframe)))
+        {
+            _selectedActionKeyframe = keyframe;
+            return null;
+        }
+
+        SelectedActionKeyframeId = keyframeId;
+        _selectedActionKeyframe = keyframe;
+        return new ActionKeyframeSelectionChangedEventArgs(SelectedActorId, keyframeId, keyframe);
+    }
+
+    private LockOnKeyframeSelectionChangedEventArgs? SetSelectedLockOnKeyframe(
+        LockOnKeyframe? keyframe,
+        bool forceNotification = false)
+    {
+        var keyframeId = keyframe?.Id;
+        if (!forceNotification &&
+            SelectedLockOnKeyframeId == keyframeId &&
+            ((_selectedLockOnKeyframe is null && keyframe is null) ||
+             SameLockOn(_selectedLockOnKeyframe, keyframe)))
+        {
+            _selectedLockOnKeyframe = keyframe;
+            return null;
+        }
+
+        SelectedLockOnKeyframeId = keyframeId;
+        _selectedLockOnKeyframe = keyframe;
+        return new LockOnKeyframeSelectionChangedEventArgs(SelectedActorId, keyframeId, keyframe);
     }
 
     private void RaiseTransformKeyframeSelectionChanged(TransformKeyframeSelectionChangedEventArgs? keyframeSelectionChange)
@@ -590,12 +1076,42 @@ public sealed class DocumentSession
         }
     }
 
-    private void RaiseSelectionAndEditAvailabilityChanged(
-        TransformKeyframeSelectionChangedEventArgs? keyframeSelectionChange,
-        EditAvailabilityChangedEventArgs? availabilityChange)
+    private void RaiseActionKeyframeSelectionChanged(ActionKeyframeSelectionChangedEventArgs? selectionChange)
     {
-        RaiseTransformKeyframeSelectionChanged(keyframeSelectionChange);
-        RaiseEditAvailabilityChanged(availabilityChange);
+        if (selectionChange is not null &&
+            selectionChange.ActorId == SelectedActorId &&
+            selectionChange.KeyframeId == SelectedActionKeyframeId &&
+            ((selectionChange.Keyframe is null && GetSelectedActionKeyframe() is null) ||
+             SameAction(selectionChange.Keyframe, GetSelectedActionKeyframe())))
+        {
+            ActionKeyframeSelectionChanged?.Invoke(this, selectionChange);
+        }
+    }
+
+    private void RaiseLockOnKeyframeSelectionChanged(LockOnKeyframeSelectionChangedEventArgs? selectionChange)
+    {
+        if (selectionChange is not null &&
+            selectionChange.ActorId == SelectedActorId &&
+            selectionChange.KeyframeId == SelectedLockOnKeyframeId &&
+            ((selectionChange.Keyframe is null && GetSelectedLockOnKeyframe() is null) ||
+             SameLockOn(selectionChange.Keyframe, GetSelectedLockOnKeyframe())))
+        {
+            LockOnKeyframeSelectionChanged?.Invoke(this, selectionChange);
+        }
+    }
+
+    private void RaiseAllSelectionAndAvailabilityChanged(
+        TransformKeyframeSelectionChangedEventArgs? transformSelectionChange,
+        ActionKeyframeSelectionChangedEventArgs? actionSelectionChange,
+        LockOnKeyframeSelectionChangedEventArgs? lockOnSelectionChange,
+        EditAvailabilityChangedEventArgs? transformAvailabilityChange,
+        TimelineEditAvailabilityChangedEventArgs? timelineAvailabilityChange)
+    {
+        RaiseTransformKeyframeSelectionChanged(transformSelectionChange);
+        RaiseActionKeyframeSelectionChanged(actionSelectionChange);
+        RaiseLockOnKeyframeSelectionChanged(lockOnSelectionChange);
+        RaiseEditAvailabilityChanged(transformAvailabilityChange);
+        RaiseTimelineEditAvailabilityChanged(timelineAvailabilityChange);
     }
 
     private (bool CanAdd, string? Reason) GetAddTransformKeyframeAvailability()
@@ -651,37 +1167,161 @@ public sealed class DocumentSession
         }
     }
 
-    private void ReconcileSelectedTransformKeyframeAfterMutation()
+    private static string GetNextActionKeyframeId(ActorTrack actor)
     {
-        var actor = GetSelectedActor();
-        if (actor is null)
+        var existingIds = actor.ActionKeyframes.Select(frame => frame.Id).ToHashSet(StringComparer.Ordinal);
+        for (var ordinal = 1; ; ordinal++)
         {
-            var noSelectionChange = SetSelectedTransformKeyframe(null);
-            UpdateEditAvailability();
-            RaiseTransformKeyframeSelectionChanged(noSelectionChange);
-            return;
+            var candidate = $"{actor.ActorId}-action-{ordinal:D4}";
+            if (!existingIds.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static string GetNextLockOnKeyframeId(ActorTrack actor)
+    {
+        var existingIds = actor.LockOnKeyframes.Select(frame => frame.Id).ToHashSet(StringComparer.Ordinal);
+        for (var ordinal = 1; ; ordinal++)
+        {
+            var candidate = $"{actor.ActorId}-lock-on-{ordinal:D4}";
+            if (!existingIds.Contains(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private void ReconcileAllSelectedKeyframesAfterMutation()
+    {
+        var preferredTransformId = SelectedTransformKeyframeId;
+        var preferredActionId = SelectedActionKeyframeId;
+        var preferredLockOnId = SelectedLockOnKeyframeId;
+        for (var attempt = 0; attempt < MaxReconciliationAttempts; attempt++)
+        {
+            var actor = GetSelectedActor();
+            if (actor is null)
+            {
+                var revisionBeforePublish = _document.Revision;
+                var noTransformChange = SetSelectedTransformKeyframe(null);
+                var noActionChange = SetSelectedActionKeyframe(null);
+                var noLockOnChange = SetSelectedLockOnKeyframe(null);
+                var noActorAvailabilityChanges = RefreshAllEditAvailabilityState();
+                RaiseAllSelectionAndAvailabilityChanged(
+                    noTransformChange,
+                    noActionChange,
+                    noLockOnChange,
+                    noActorAvailabilityChanges.Transform,
+                    noActorAvailabilityChanges.Timeline);
+                if (_document.Revision == revisionBeforePublish && GetSelectedActor() is null)
+                {
+                    return;
+                }
+
+                continue;
+            }
+
+            var actorId = actor.ActorId;
+            var transform = SelectTransformForReconciliation(actor, preferredTransformId);
+            var action = SelectActionForReconciliation(actor, preferredActionId);
+            var lockOn = SelectLockOnForReconciliation(actor, preferredLockOnId);
+            var activeTime = GetActiveTimelineSelectionTime(transform, action, lockOn);
+            if (activeTime is not null &&
+                Math.Abs(Playback.CurrentTimeSeconds - activeTime.Value) > EditTimeToleranceSeconds)
+            {
+                Playback.Seek(activeTime.Value);
+                continue;
+            }
+
+            var revisionBeforeSelectionPublish = _document.Revision;
+            var transformChange = SetSelectedTransformKeyframe(transform);
+            var actionChange = SetSelectedActionKeyframe(action);
+            var lockOnChange = SetSelectedLockOnKeyframe(lockOn);
+            var availabilityChanges = RefreshAllEditAvailabilityState();
+            RaiseAllSelectionAndAvailabilityChanged(
+                transformChange,
+                actionChange,
+                lockOnChange,
+                availabilityChanges.Transform,
+                availabilityChanges.Timeline);
+
+            actor = GetSelectedActor();
+            if (_document.Revision != revisionBeforeSelectionPublish || actor?.ActorId != actorId)
+            {
+                continue;
+            }
+
+            transform = SelectTransformForReconciliation(actor, preferredTransformId);
+            action = SelectActionForReconciliation(actor, preferredActionId);
+            lockOn = SelectLockOnForReconciliation(actor, preferredLockOnId);
+            activeTime = GetActiveTimelineSelectionTime(transform, action, lockOn);
+            if (activeTime is null ||
+                Math.Abs(Playback.CurrentTimeSeconds - activeTime.Value) <= EditTimeToleranceSeconds)
+            {
+                return;
+            }
         }
 
-        var selected = SelectedTransformKeyframeId is null
+        throw new InvalidOperationException("Timeline selection reconciliation did not stabilize.");
+    }
+
+    private double? GetActiveTimelineSelectionTime(
+        TransformKeyframe? transform,
+        ActionKeyframe? action,
+        LockOnKeyframe? lockOn) => ActiveTimelineTrack switch
+        {
+            TimelineTrackKind.Transform => transform?.TimeSeconds,
+            TimelineTrackKind.Action => action?.TimeSeconds,
+            TimelineTrackKind.LockOn => lockOn?.TimeSeconds,
+            _ => null
+        };
+
+    private TransformKeyframe? SelectTransformForReconciliation(ActorTrack actor, string? preferredId) =>
+        (preferredId is null
             ? null
-            : actor.TransformKeyframes.SingleOrDefault(frame => frame.Id == SelectedTransformKeyframeId);
-        selected ??= actor.TransformKeyframes.SingleOrDefault(frame =>
-            Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds) <= EditTimeToleranceSeconds);
-        selected ??= actor.TransformKeyframes
+            : actor.TransformKeyframes.SingleOrDefault(frame => frame.Id == preferredId)) ??
+        actor.TransformKeyframes.SingleOrDefault(frame =>
+            Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds) <= EditTimeToleranceSeconds) ??
+        actor.TransformKeyframes
             .OrderBy(frame => Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds))
             .ThenBy(frame => frame.TimeSeconds)
             .ThenBy(frame => frame.Id, StringComparer.Ordinal)
             .FirstOrDefault();
 
-        var keyframeSelectionChange = SetSelectedTransformKeyframe(selected);
-        if (selected is not null && Math.Abs(Playback.CurrentTimeSeconds - selected.TimeSeconds) > EditTimeToleranceSeconds)
-        {
-            Playback.Seek(selected.TimeSeconds);
-        }
+    private ActionKeyframe? SelectActionForReconciliation(ActorTrack actor, string? preferredId) =>
+        (preferredId is null
+            ? null
+            : actor.ActionKeyframes.SingleOrDefault(frame => frame.Id == preferredId)) ??
+        actor.ActionKeyframes.SingleOrDefault(frame =>
+            Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds) <= EditTimeToleranceSeconds) ??
+        actor.ActionKeyframes
+            .OrderBy(frame => Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds))
+            .ThenBy(frame => frame.TimeSeconds)
+            .ThenBy(frame => frame.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
 
-        UpdateEditAvailability();
-        RaiseTransformKeyframeSelectionChanged(keyframeSelectionChange);
-    }
+    private LockOnKeyframe? SelectLockOnForReconciliation(ActorTrack actor, string? preferredId) =>
+        (preferredId is null
+            ? null
+            : actor.LockOnKeyframes.SingleOrDefault(frame => frame.Id == preferredId)) ??
+        actor.LockOnKeyframes.SingleOrDefault(frame =>
+            Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds) <= EditTimeToleranceSeconds) ??
+        actor.LockOnKeyframes
+            .OrderBy(frame => Math.Abs(frame.TimeSeconds - Playback.CurrentTimeSeconds))
+            .ThenBy(frame => frame.TimeSeconds)
+            .ThenBy(frame => frame.Id, StringComparer.Ordinal)
+            .FirstOrDefault();
+
+    private ActionKeyframe? GetCurrentActionKeyframe(string actorId, string keyframeId) =>
+        SelectedActorId == actorId
+            ? GetSelectedActor()?.ActionKeyframes.SingleOrDefault(frame => frame.Id == keyframeId)
+            : null;
+
+    private LockOnKeyframe? GetCurrentLockOnKeyframe(string actorId, string keyframeId) =>
+        SelectedActorId == actorId
+            ? GetSelectedActor()?.LockOnKeyframes.SingleOrDefault(frame => frame.Id == keyframeId)
+            : null;
 
     private static bool SameTransform(TransformKeyframe? left, TransformKeyframe? right) =>
         left is not null && right is not null &&
@@ -689,6 +1329,21 @@ public sealed class DocumentSession
         left.TimeSeconds == right.TimeSeconds &&
         left.Position == right.Position &&
         left.YawDegrees == right.YawDegrees;
+
+    private static bool SameAction(ActionKeyframe? left, ActionKeyframe? right) =>
+        left is not null && right is not null &&
+        left.Id == right.Id &&
+        left.TimeSeconds == right.TimeSeconds &&
+        left.ActionKey == right.ActionKey;
+
+    private static bool SameLockOn(LockOnKeyframe? left, LockOnKeyframe? right) =>
+        left is not null && right is not null &&
+        left.Id == right.Id &&
+        left.TimeSeconds == right.TimeSeconds &&
+        left.Enabled == right.Enabled &&
+        left.TargetActorId == right.TargetActorId &&
+        left.YawOffsetDegrees == right.YawOffsetDegrees &&
+        left.TrackingMode == right.TrackingMode;
 
     private void ClearPreview()
     {
