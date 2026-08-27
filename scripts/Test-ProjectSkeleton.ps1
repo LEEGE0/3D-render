@@ -6,8 +6,10 @@ $ErrorActionPreference = 'Stop'
 
 $projectRoot = Join-Path $RepositoryRoot 'src\PvpGuide.Editor'
 $domainRoot = Join-Path $RepositoryRoot 'src\PvpGuide.Domain'
+$applicationRoot = Join-Path $RepositoryRoot 'src\PvpGuide.Application'
 $infrastructureRoot = Join-Path $RepositoryRoot 'src\PvpGuide.Infrastructure'
 $testRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Domain.Tests'
+$applicationTestRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Application.Tests'
 $infrastructureTestRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Infrastructure.Tests'
 $editorTestRoot = Join-Path $RepositoryRoot 'tests\PvpGuide.Editor.Tests'
 $sampleRoot = Join-Path $RepositoryRoot 'samples\guides'
@@ -25,6 +27,14 @@ $requiredFiles = @(
     (Join-Path $domainRoot 'Timeline\TransformKeyframe.cs'),
     (Join-Path $domainRoot 'Timeline\ActionKeyframe.cs'),
     (Join-Path $domainRoot 'Timeline\LockOnKeyframe.cs'),
+    (Join-Path $applicationRoot 'PvpGuide.Application.csproj'),
+    (Join-Path $applicationRoot 'Properties\AssemblyInfo.cs'),
+    (Join-Path $applicationRoot 'Sessions\DocumentSession.cs'),
+    (Join-Path $applicationRoot 'Sessions\SelectionChangedEventArgs.cs'),
+    (Join-Path $applicationRoot 'Editing\TransformPreview.cs'),
+    (Join-Path $applicationRoot 'Editing\TransformPreviewChangedEventArgs.cs'),
+    (Join-Path $applicationRoot 'Commands\ISceneEditCommand.cs'),
+    (Join-Path $applicationRoot 'Commands\ReplaceTransformCommand.cs'),
     (Join-Path $infrastructureRoot 'PvpGuide.Infrastructure.csproj'),
     (Join-Path $infrastructureRoot 'Serialization\SceneDocumentSerializer.cs'),
     (Join-Path $infrastructureRoot 'Import\TopviewGuideV1Importer.cs'),
@@ -35,6 +45,8 @@ $requiredFiles = @(
     (Join-Path $testRoot 'PvpGuide.Domain.Tests.csproj'),
     (Join-Path $testRoot 'DomainAssemblyTests.cs'),
     (Join-Path $testRoot 'SceneDocumentTests.cs'),
+    (Join-Path $applicationTestRoot 'PvpGuide.Application.Tests.csproj'),
+    (Join-Path $applicationTestRoot 'DocumentSessionTests.cs'),
     (Join-Path $infrastructureTestRoot 'PvpGuide.Infrastructure.Tests.csproj'),
     (Join-Path $infrastructureTestRoot 'TopviewGuideV1ImporterTests.cs'),
     (Join-Path $infrastructureTestRoot 'SceneRoundTripTests.cs'),
@@ -66,6 +78,8 @@ $projectFile = Join-Path $projectRoot 'project.godot'
 $csprojFile = Join-Path $projectRoot 'PvpGuide.Editor.csproj'
 $sceneFile = Join-Path $projectRoot 'Scenes\Main\Main.tscn'
 $testProjectFile = Join-Path $testRoot 'PvpGuide.Domain.Tests.csproj'
+$applicationProjectFile = Join-Path $applicationRoot 'PvpGuide.Application.csproj'
+$applicationTestProjectFile = Join-Path $applicationTestRoot 'PvpGuide.Application.Tests.csproj'
 $infrastructureProjectFile = Join-Path $infrastructureRoot 'PvpGuide.Infrastructure.csproj'
 $infrastructureTestProjectFile = Join-Path $infrastructureTestRoot 'PvpGuide.Infrastructure.Tests.csproj'
 
@@ -78,6 +92,8 @@ Assert-Contains $csprojFile '<TargetFramework>net8\.0</TargetFramework>' '.NET �
 Assert-Contains $csprojFile '<EnableDynamicLoading>true</EnableDynamicLoading>' 'Godot 동적 로딩 설정'
 Assert-Contains $csprojFile '\.\./PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Editor에서 Domain 프로젝트 참조'
 Assert-Contains $testProjectFile '\.\./\.\./src/PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Domain 프로젝트 참조'
+Assert-Contains $applicationProjectFile '\.\./PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Application에서 Domain 프로젝트 참조'
+Assert-Contains $applicationTestProjectFile '\.\./\.\./src/PvpGuide\.Application/PvpGuide\.Application\.csproj' 'Application 테스트 프로젝트 참조'
 Assert-Contains $infrastructureProjectFile '\.\./PvpGuide\.Domain/PvpGuide\.Domain\.csproj' 'Infrastructure에서 Domain 프로젝트 참조'
 Assert-Contains $infrastructureTestProjectFile '\.\./\.\./src/PvpGuide\.Infrastructure/PvpGuide\.Infrastructure\.csproj' 'Infrastructure 테스트 프로젝트 참조'
 Assert-Contains $infrastructureTestProjectFile 'synthetic-topview-v1\.scene\.json' '합성 가져오기 fixture 포함'

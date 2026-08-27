@@ -1,0 +1,409 @@
+using PvpGuide.Application.Commands;
+using PvpGuide.Application.Editing;
+using PvpGuide.Application.Sessions;
+using PvpGuide.Domain;
+using PvpGuide.Domain.Actors;
+using PvpGuide.Domain.Timeline;
+using Xunit;
+
+namespace PvpGuide.Application.Tests;
+
+public sealed class DocumentSessionTests
+{
+    [Fact]
+    public void Move_undo_redo_changes_only_the_first_transform_and_keeps_revision_monotonic()
+    {
+        var session = CreateSession(out var document);
+        session.SelectActor("host");
+
+        Assert.True(session.MoveSelectedActor(new Position3(5, 2, 7)));
+        Assert.True(session.Undo());
+        Assert.True(session.Redo());
+
+        var host = document.Actors.Single(actor => actor.ActorId == "host");
+        Assert.Equal(new Position3(5, 2, 7), host.TransformKeyframes[0].Position);
+        Assert.Equal(new Position3(2, 3, 4), host.TransformKeyframes[1].Position);
+        Assert.Equal(3, document.Revision);
+        Assert.True(session.CanUndo);
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void SelectActor_changes_selection_without_changing_document_and_raises_once_per_change()
+    {
+        var session = CreateSession(out var document);
+        var selections = new List<string?>();
+        session.SelectionChanged += (_, args) => selections.Add(args.SelectedActorId);
+
+        session.SelectActor("host");
+        session.SelectActor("host");
+        session.SelectActor(null);
+
+        Assert.Equal(["host", null], selections);
+        Assert.Null(session.SelectedActorId);
+        Assert.Equal(0, document.Revision);
+        Assert.False(session.CanUndo);
+    }
+
+    [Fact]
+    public void SelectActor_rejects_unknown_actor_and_keeps_the_current_selection()
+    {
+        var session = CreateSession(out _);
+        session.SelectActor("host");
+
+        Assert.Throws<ArgumentException>(() => session.SelectActor("missing"));
+
+        Assert.Equal("host", session.SelectedActorId);
+    }
+
+    [Fact]
+    public void GetSelectedTransform_returns_the_selected_actors_first_keyframe()
+    {
+        var session = CreateSession(out _);
+
+        Assert.Null(session.GetSelectedTransform());
+        session.SelectActor("host");
+
+        var selected = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        Assert.Equal("host-first", selected.Id);
+        Assert.Equal(1, selected.TimeSeconds);
+    }
+
+    [Fact]
+    public void Editing_without_a_selection_returns_false_without_changing_the_document()
+    {
+        var session = CreateSession(out var document);
+
+        Assert.False(session.MoveSelectedActor(new Position3(5, 2, 7)));
+        Assert.False(session.RotateSelectedActor(90));
+        Assert.False(session.SetSelectedActorTransform(new Position3(5, 2, 7), 90));
+
+        Assert.Equal(0, document.Revision);
+        Assert.False(session.CanUndo);
+    }
+
+    [Fact]
+    public void Move_preserves_yaw_and_rotate_preserves_position_while_normalizing_yaw()
+    {
+        var session = CreateSession(out var document);
+        session.SelectActor("host");
+
+        Assert.True(session.MoveSelectedActor(new Position3(5, 2, 7)));
+        Assert.True(session.RotateSelectedActor(-90));
+
+        var first = document.Actors.Single(actor => actor.ActorId == "host").TransformKeyframes[0];
+        Assert.Equal(new Position3(5, 2, 7), first.Position);
+        Assert.Equal(270, first.YawDegrees);
+    }
+
+    [Fact]
+    public void No_op_edit_preserves_existing_undo_and_redo_history()
+    {
+        var session = CreateSessionWithUndoAndRedo(out var document);
+        var expectedRevision = document.Revision;
+        var expectedTransform = session.GetSelectedTransform();
+
+        Assert.False(session.SetSelectedActorTransform(expectedTransform!.Position, expectedTransform.YawDegrees + 360));
+
+        Assert.Equal(expectedRevision, document.Revision);
+        Assert.Equal(expectedTransform, session.GetSelectedTransform());
+        Assert.Equal(1, session.UndoCount);
+        Assert.Equal(1, session.RedoCount);
+        Assert.True(session.CanUndo);
+        Assert.True(session.CanRedo);
+    }
+
+    [Fact]
+    public void New_edit_after_undo_clears_redo_history()
+    {
+        var session = CreateSession(out _);
+        session.SelectActor("host");
+        Assert.True(session.MoveSelectedActor(new Position3(5, 2, 7)));
+        Assert.True(session.Undo());
+
+        Assert.True(session.RotateSelectedActor(90));
+
+        Assert.True(session.CanUndo);
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void Failed_execute_preserves_history_stacks()
+    {
+        var session = CreateSessionWithUndoAndRedo(out var document);
+        var original = new TransformKeyframe("host-first", 1, new Position3(1, 2, 3), 10);
+        var expectedTransform = session.GetSelectedTransform();
+        var expectedRevision = document.Revision;
+
+        Assert.False(session.ExecuteCommand(new ReplaceTransformCommand(
+            "host",
+            original,
+            new TransformKeyframe(original.Id, original.TimeSeconds, new Position3(9, 2, 11), 90))));
+
+        Assert.Equal(expectedRevision, document.Revision);
+        Assert.Equal(expectedTransform, session.GetSelectedTransform());
+        Assert.Equal(1, session.UndoCount);
+        Assert.Equal(1, session.RedoCount);
+        Assert.True(session.CanUndo);
+        Assert.True(session.CanRedo);
+    }
+
+    [Fact]
+    public void Failed_undo_preserves_history_stacks()
+    {
+        var session = CreateSessionWithUndoAndRedo(out var document);
+        var current = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        document.ReplaceTransformKeyframe(
+            "host",
+            current,
+            new TransformKeyframe(current.Id, current.TimeSeconds, new Position3(6, 2, 8), current.YawDegrees));
+        var expectedTransform = session.GetSelectedTransform();
+        var expectedRevision = document.Revision;
+
+        Assert.False(session.Undo());
+
+        Assert.Equal(expectedRevision, document.Revision);
+        Assert.Equal(expectedTransform, session.GetSelectedTransform());
+        Assert.Equal(1, session.UndoCount);
+        Assert.Equal(1, session.RedoCount);
+        Assert.True(session.CanUndo);
+        Assert.True(session.CanRedo);
+    }
+
+    [Fact]
+    public void Failed_redo_preserves_history_stacks()
+    {
+        var session = CreateSessionWithUndoAndRedo(out var document);
+        var current = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        document.ReplaceTransformKeyframe(
+            "host",
+            current,
+            new TransformKeyframe(current.Id, current.TimeSeconds, new Position3(6, 2, 8), current.YawDegrees));
+        var expectedTransform = session.GetSelectedTransform();
+        var expectedRevision = document.Revision;
+
+        Assert.False(session.Redo());
+
+        Assert.Equal(expectedRevision, document.Revision);
+        Assert.Equal(expectedTransform, session.GetSelectedTransform());
+        Assert.Equal(1, session.UndoCount);
+        Assert.Equal(1, session.RedoCount);
+        Assert.True(session.CanUndo);
+        Assert.True(session.CanRedo);
+    }
+
+    [Fact]
+    public void Execute_commits_history_transition_when_a_changed_observer_throws_after_mutation()
+    {
+        var session = CreateSessionWithUndoAndRedo(out var document);
+        document.Changed += (_, _) => throw new ChangedObserverException();
+
+        Assert.Throws<ChangedObserverException>(() => session.RotateSelectedActor(180));
+
+        var current = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        Assert.Equal(4, document.Revision);
+        Assert.Equal(new Position3(5, 2, 7), current.Position);
+        Assert.Equal(180, current.YawDegrees);
+        Assert.Equal(2, session.UndoCount);
+        Assert.Equal(0, session.RedoCount);
+        Assert.True(session.CanUndo);
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void Undo_commits_history_transition_when_a_changed_observer_throws_after_mutation()
+    {
+        var session = CreateSessionWithUndoAndRedo(out var document);
+        document.Changed += (_, _) => throw new ChangedObserverException();
+
+        Assert.Throws<ChangedObserverException>(() => session.Undo());
+
+        var current = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        Assert.Equal(4, document.Revision);
+        Assert.Equal(new Position3(1, 2, 3), current.Position);
+        Assert.Equal(10, current.YawDegrees);
+        Assert.Equal(0, session.UndoCount);
+        Assert.Equal(2, session.RedoCount);
+        Assert.False(session.CanUndo);
+        Assert.True(session.CanRedo);
+    }
+
+    [Fact]
+    public void Redo_commits_history_transition_when_a_changed_observer_throws_after_mutation()
+    {
+        var session = CreateSessionWithUndoAndRedo(out var document);
+        document.Changed += (_, _) => throw new ChangedObserverException();
+
+        Assert.Throws<ChangedObserverException>(() => session.Redo());
+
+        var current = Assert.IsType<TransformKeyframe>(session.GetSelectedTransform());
+        Assert.Equal(4, document.Revision);
+        Assert.Equal(new Position3(5, 2, 7), current.Position);
+        Assert.Equal(90, current.YawDegrees);
+        Assert.Equal(2, session.UndoCount);
+        Assert.Equal(0, session.RedoCount);
+        Assert.True(session.CanUndo);
+        Assert.False(session.CanRedo);
+    }
+
+    [Fact]
+    public void Preview_updates_without_changing_document_or_history_and_commit_changes_once()
+    {
+        var session = CreateSession(out var document);
+        TransformPreview? firstSubscriberPreview = null;
+        TransformPreview? secondSubscriberPreview = null;
+        TransformPreview? lastPreview = new TransformPreview("placeholder", "placeholder", new Position3(0, 0, 0), 0);
+        var previewEvents = new List<string>();
+        session.PreviewChanged += (_, args) =>
+        {
+            firstSubscriberPreview = args.Preview;
+            lastPreview = args.Preview;
+            previewEvents.Add(args.Preview is null ? "null" : "preview");
+        };
+        session.PreviewChanged += (_, args) => secondSubscriberPreview = args.Preview;
+        session.SelectActor("host");
+
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(3, 2, 4), 450);
+
+        Assert.Equal(0, document.Revision);
+        Assert.False(session.CanUndo);
+        Assert.NotNull(firstSubscriberPreview);
+        Assert.Equal("host", firstSubscriberPreview.ActorId);
+        Assert.Equal("host-first", firstSubscriberPreview.KeyframeId);
+        Assert.Equal(90, firstSubscriberPreview.YawDegrees);
+        Assert.Same(firstSubscriberPreview, secondSubscriberPreview);
+        Assert.Equal(["preview"], previewEvents);
+
+        Assert.True(session.CommitPreview());
+        Assert.Equal(1, document.Revision);
+        Assert.True(session.CanUndo);
+        Assert.Null(lastPreview);
+        Assert.Equal(["preview", "null"], previewEvents);
+    }
+
+    [Fact]
+    public void Preview_requires_an_active_selected_actor()
+    {
+        var session = CreateSession(out _);
+        Assert.Throws<InvalidOperationException>(() => session.BeginPreview());
+        Assert.Throws<InvalidOperationException>(() => session.UpdatePreview(new Position3(1, 2, 3), 0));
+        Assert.False(session.CommitPreview());
+
+        session.SelectActor("host");
+        session.BeginPreview();
+        Assert.Throws<InvalidOperationException>(() => session.BeginPreview());
+    }
+
+    [Fact]
+    public void CancelPreview_clears_preview_without_changing_document_or_history()
+    {
+        var session = CreateSession(out var document);
+        TransformPreview? lastPreview = new TransformPreview("placeholder", "placeholder", new Position3(0, 0, 0), 0);
+        var previewEvents = new List<string>();
+        session.PreviewChanged += (_, args) =>
+        {
+            lastPreview = args.Preview;
+            previewEvents.Add(args.Preview is null ? "null" : "preview");
+        };
+        session.SelectActor("host");
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(3, 2, 4), 90);
+
+        session.CancelPreview();
+
+        Assert.Null(lastPreview);
+        Assert.Equal(0, document.Revision);
+        Assert.False(session.CanUndo);
+        Assert.Equal(["preview", "null"], previewEvents);
+
+        session.CancelPreview();
+
+        Assert.Equal(["preview", "null"], previewEvents);
+    }
+
+    [Fact]
+    public void No_op_preview_commit_clears_preview_and_preserves_existing_undo_and_redo_history()
+    {
+        var session = CreateSessionWithUndoAndRedo(out var document);
+        TransformPreview? lastPreview = new TransformPreview("placeholder", "placeholder", new Position3(0, 0, 0), 0);
+        session.PreviewChanged += (_, args) => lastPreview = args.Preview;
+        var expectedTransform = session.GetSelectedTransform();
+        var expectedRevision = document.Revision;
+        session.BeginPreview();
+        session.UpdatePreview(expectedTransform!.Position, expectedTransform.YawDegrees + 360);
+
+        Assert.False(session.CommitPreview());
+
+        Assert.Null(lastPreview);
+        Assert.Equal(expectedRevision, document.Revision);
+        Assert.Equal(expectedTransform, session.GetSelectedTransform());
+        Assert.Equal(1, session.UndoCount);
+        Assert.Equal(1, session.RedoCount);
+        Assert.True(session.CanUndo);
+        Assert.True(session.CanRedo);
+    }
+
+    [Fact]
+    public void Selection_change_clears_preview_before_raising_selection_and_same_selection_is_silent()
+    {
+        var session = CreateSession(out _);
+        var events = new List<string>();
+        session.PreviewChanged += (_, args) => events.Add(args.Preview is null ? "preview:null" : "preview:value");
+        session.SelectionChanged += (_, args) => events.Add($"selection:{args.SelectedActorId}");
+        session.SelectActor("host");
+        events.Clear();
+        session.BeginPreview();
+        session.UpdatePreview(new Position3(3, 2, 4), 90);
+
+        session.SelectActor("target");
+        session.SelectActor("target");
+        session.CancelPreview();
+
+        Assert.Equal(["preview:value", "preview:null", "selection:target"], events);
+    }
+
+    private static DocumentSession CreateSession(out SceneDocument document)
+    {
+        document = SceneDocument.Create(
+            "document-1",
+            "Editable",
+            null,
+            10,
+            30,
+            [
+                new ActorTrack(
+                    "host",
+                    "Host",
+                    "Hero",
+                    [
+                        new TransformKeyframe("host-first", 1, new Position3(1, 2, 3), 10),
+                        new TransformKeyframe("host-second", 4, new Position3(2, 3, 4), 20),
+                    ],
+                    [],
+                    []),
+                new ActorTrack(
+                    "target",
+                    "Target",
+                    "Enemy",
+                    [new TransformKeyframe("target-first", 1, new Position3(7, 0, 8), 180)],
+                    [],
+                    [])
+            ]);
+        return new DocumentSession(document);
+    }
+
+    private static DocumentSession CreateSessionWithUndoAndRedo(out SceneDocument document)
+    {
+        var session = CreateSession(out document);
+        session.SelectActor("host");
+        Assert.True(session.MoveSelectedActor(new Position3(5, 2, 7)));
+        Assert.True(session.RotateSelectedActor(90));
+        Assert.True(session.Undo());
+        Assert.Equal(1, session.UndoCount);
+        Assert.Equal(1, session.RedoCount);
+        return session;
+    }
+
+    private sealed class ChangedObserverException : Exception;
+}

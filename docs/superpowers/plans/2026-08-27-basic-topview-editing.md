@@ -186,7 +186,7 @@
 - Consumes: Task 1 `SceneDocument.GetTransformKeyframe`, `ReplaceTransformKeyframe`, actor의 첫 `TransformKeyframes[0]`
 - Produces: `DocumentSession`, `SelectionChanged`, `TransformPreview`, `PreviewChanged`, `MoveSelectedActor`, `RotateSelectedActor`, `SetSelectedActorTransform`, `Begin/Update/Commit/CancelPreview`, `Undo`, `Redo`
 
-- [ ] **Step 1: Application 프로젝트와 실패 테스트 골격을 만든다**
+- [x] **Step 1: Application 프로젝트와 실패 테스트 골격을 만든다**
 
   Application 프로젝트는 `net8.0`, nullable, implicit usings, warnings-as-errors를 사용하고 Domain만 참조한다. 테스트 프로젝트는 xUnit v3와 Application 프로젝트를 참조한다. `InternalsVisibleTo("PvpGuide.Application.Tests")`는 internal command의 실패 스택 보존을 실제로 검증하는 용도로만 둔다.
 
@@ -212,7 +212,7 @@
 
   추가 테스트는 known actor 선택/해제, unknown 선택 실패, no selection 편집 실패, Move의 yaw 보존, Rotate의 position 보존·yaw normalize, no-op history 없음, Undo 뒤 새 edit의 Redo 삭제를 포함한다.
 
-- [ ] **Step 2: 새 Application 테스트를 실행해 RED를 확인한다**
+- [x] **Step 2: 새 Application 테스트를 실행해 RED를 확인한다**
 
   Run:
 
@@ -223,7 +223,7 @@
 
   Expected: `DocumentSession`과 관련 타입이 없어서 컴파일 실패한다.
 
-- [ ] **Step 3: 선택과 단일 명령 실행을 최소 구현한다**
+- [x] **Step 3: 선택과 단일 명령 실행을 최소 구현한다**
 
   `DocumentSession`은 생성자에서 non-null `SceneDocument`를 받고 `SnapshotSource`로 읽기 포트만 공개한다. `SelectActor(null)`은 해제, non-null은 `document.Actors`에 정확히 존재해야 한다. 같은 선택은 event를 만들지 않는다.
 
@@ -249,13 +249,13 @@
   }
   ```
 
-- [ ] **Step 4: Undo/Redo 스택 실패 원자성을 TDD로 구현한다**
+- [x] **Step 4: Undo/Redo 스택 실패 원자성을 TDD로 구현한다**
 
   command가 성공한 뒤에만 undo stack에 push하고 redo를 clear한다. Undo/Redo는 `Peek()`으로 실행이 성공한 뒤에만 pop/push한다. internal test command가 stale preimage로 실패하게 만들어 stack count와 `CanUndo`/`CanRedo`가 보존되는지 검사한다.
 
   `Undo()`/`Redo()`는 빈 스택이면 `false`다. 명령의 domain 변경이 no-op `false`를 반환하면 history 이동도 하지 않는다.
 
-- [ ] **Step 5: preview RED 테스트와 최소 구현을 추가한다**
+- [x] **Step 5: preview RED 테스트와 최소 구현을 추가한다**
 
   다음 흐름을 테스트한다.
 
@@ -276,7 +276,7 @@
 
   `TransformPreview`는 actor ID, keyframe ID, Position3, normalized Yaw를 가진 불변 값이다. `BeginPreview`는 현재 선택과 첫 keyframe을 캡처하고, `UpdatePreview`는 ID/time을 바꾸지 않는다. `CancelPreview`와 selection 변경은 preview를 지운다. preview event subscriber에 같은 인스턴스를 전달한다.
 
-- [ ] **Step 6: Application·Domain 테스트와 구조 스크립트를 직렬 검증한다**
+- [x] **Step 6: Application·Domain 테스트와 구조 스크립트를 직렬 검증한다**
 
   `Test-ProjectSkeleton.ps1`에 Application 프로젝트·소스·테스트 파일과 Application→Domain 참조를 추가한다.
 
@@ -292,7 +292,7 @@
 
   Expected: 두 테스트 프로젝트 실패 0, 구조 PASS, 금지 의존성 0.
 
-- [ ] **Step 7: fresh 리뷰 후 메인이 Task 2만 커밋·푸시한다**
+- [x] **Step 7: fresh 리뷰 후 메인이 Task 2만 커밋·푸시한다**
 
   리뷰는 selection과 document event 분리, first-key 정책, no-op, preview 비영구성, failed execute/undo/redo stack 보존을 확인한다. 승인 후 정확한 새 Application·Application.Tests·구조 스크립트 경로만 스테이징한다.
 
