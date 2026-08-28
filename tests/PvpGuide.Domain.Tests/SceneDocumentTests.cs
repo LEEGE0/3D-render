@@ -263,6 +263,103 @@ public sealed class SceneDocumentTests
     }
 
     [Fact]
+    public void SceneSnapshot_normalizes_supplied_facing_yaw_and_preserves_provenance()
+    {
+        var transforms = new Dictionary<string, EvaluatedTransform>
+        {
+            ["negative"] = new EvaluatedTransform(new Position3(0, 0, 0), 0),
+            ["large"] = new EvaluatedTransform(new Position3(0, 0, 0), 0),
+            ["full-turn"] = new EvaluatedTransform(new Position3(0, 0, 0), 0),
+        };
+        var snapshot = new SceneSnapshot(
+            "normalized-facing",
+            1,
+            0,
+            transforms,
+            new Dictionary<string, EvaluatedActorTimelineState>(),
+            new Dictionary<string, EvaluatedActorFacing>
+            {
+                ["negative"] = new EvaluatedActorFacing(-10, FacingResolutionKind.SnapTarget, "negative-source"),
+                ["large"] = new EvaluatedActorFacing(725, FacingResolutionKind.ContinuousTarget, "large-source"),
+                ["full-turn"] = new EvaluatedActorFacing(360, FacingResolutionKind.AuthoredKeyframeOnly, "turn-source"),
+            },
+            1);
+
+        Assert.Equal(350, snapshot.ActorFacings["negative"].YawDegrees);
+        Assert.Equal(FacingResolutionKind.SnapTarget, snapshot.ActorFacings["negative"].ResolutionKind);
+        Assert.Equal("negative-source", snapshot.ActorFacings["negative"].SourceLockOnKeyframeId);
+        Assert.Equal(5, snapshot.ActorFacings["large"].YawDegrees);
+        Assert.Equal(FacingResolutionKind.ContinuousTarget, snapshot.ActorFacings["large"].ResolutionKind);
+        Assert.Equal("large-source", snapshot.ActorFacings["large"].SourceLockOnKeyframeId);
+        Assert.Equal(0, snapshot.ActorFacings["full-turn"].YawDegrees);
+        Assert.Equal(FacingResolutionKind.AuthoredKeyframeOnly, snapshot.ActorFacings["full-turn"].ResolutionKind);
+        Assert.Equal("turn-source", snapshot.ActorFacings["full-turn"].SourceLockOnKeyframeId);
+    }
+
+    [Fact]
+    public void SceneSnapshot_rejects_null_and_non_finite_supplied_facing_values()
+    {
+        var transforms = new Dictionary<string, EvaluatedTransform>
+        {
+            ["host"] = new EvaluatedTransform(new Position3(0, 0, 0), 0),
+        };
+        var states = new Dictionary<string, EvaluatedActorTimelineState>();
+
+        Assert.Throws<ArgumentException>(() => new SceneSnapshot(
+            "invalid-facing",
+            1,
+            0,
+            transforms,
+            states,
+            new Dictionary<string, EvaluatedActorFacing> { ["host"] = null! },
+            1));
+
+        foreach (var nonFiniteValue in NonFiniteValues)
+        {
+            Assert.Throws<ArgumentException>(() => new SceneSnapshot(
+                "invalid-facing",
+                1,
+                0,
+                transforms,
+                states,
+                new Dictionary<string, EvaluatedActorFacing>
+                {
+                    ["host"] = new EvaluatedActorFacing(
+                        nonFiniteValue,
+                        FacingResolutionKind.ContinuousTarget,
+                        "source"),
+                },
+                1));
+        }
+    }
+
+    [Fact]
+    public void SceneSnapshot_compatibility_fallback_normalizes_facing_without_changing_authored_transform()
+    {
+        var fourArgumentTransforms = new Dictionary<string, EvaluatedTransform>
+        {
+            ["negative"] = new EvaluatedTransform(new Position3(0, 0, 0), -10),
+        };
+        var fiveArgumentTransforms = new Dictionary<string, EvaluatedTransform>
+        {
+            ["large"] = new EvaluatedTransform(new Position3(0, 0, 0), 725),
+        };
+
+        var fourArgumentSnapshot = new SceneSnapshot("four-fallback", 1, 0, fourArgumentTransforms);
+        var fiveArgumentSnapshot = new SceneSnapshot(
+            "five-fallback",
+            1,
+            0,
+            fiveArgumentTransforms,
+            new Dictionary<string, EvaluatedActorTimelineState>());
+
+        Assert.Equal(-10, fourArgumentSnapshot.ActorTransforms["negative"].YawDegrees);
+        Assert.Equal(350, fourArgumentSnapshot.ActorFacings["negative"].YawDegrees);
+        Assert.Equal(725, fiveArgumentSnapshot.ActorTransforms["large"].YawDegrees);
+        Assert.Equal(5, fiveArgumentSnapshot.ActorFacings["large"].YawDegrees);
+    }
+
+    [Fact]
     public void SceneDocument_rejects_invalid_duration_and_non_positive_integer_fps()
     {
         foreach (var nonFiniteValue in NonFiniteValues)

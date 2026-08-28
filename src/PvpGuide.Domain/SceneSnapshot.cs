@@ -101,6 +101,11 @@ public sealed class SceneSnapshot
             }
         }
 
+        foreach (var actorId in copiedFacings.Keys.ToArray())
+        {
+            copiedFacings[actorId] = NormalizeFacing(copiedFacings[actorId], nameof(actorFacings));
+        }
+
         foreach (var (actorId, transform) in copiedTransforms)
         {
             if (!copiedFacings.ContainsKey(actorId))
@@ -149,5 +154,28 @@ public sealed class SceneSnapshot
     }
 
     private static EvaluatedActorFacing CreateAuthoredFacing(EvaluatedTransform transform) =>
-        new(transform.YawDegrees, FacingResolutionKind.AuthoredDisabled, null);
+        NormalizeFacing(
+            new EvaluatedActorFacing(transform.YawDegrees, FacingResolutionKind.AuthoredDisabled, null),
+            nameof(transform));
+
+    private static EvaluatedActorFacing NormalizeFacing(
+        EvaluatedActorFacing? facing,
+        string parameterName)
+    {
+        if (facing is null)
+        {
+            throw new ArgumentException("Facing values cannot be null.", parameterName);
+        }
+
+        if (!double.IsFinite(facing.YawDegrees))
+        {
+            throw new ArgumentException("Facing yaw must be finite.", parameterName);
+        }
+
+        var yawDegrees = TransformKeyframe.NormalizeYaw(facing.YawDegrees);
+        return new EvaluatedActorFacing(
+            yawDegrees == 0 ? 0 : yawDegrees,
+            facing.ResolutionKind,
+            facing.SourceLockOnKeyframeId);
+    }
 }
