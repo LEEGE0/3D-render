@@ -170,7 +170,7 @@ public sealed class SceneProjectionController : IDisposable
         }
 
         var plan = _source.CreateTrajectorySamplePlan(_samplingSettings);
-        TrajectorySamplingPolicy.ValidatePlan(plan);
+        TrajectorySamplingPolicy.ValidatePlan(plan, metadata);
         var trajectories = GetTrajectories(metadata, plan);
         var snapshot = _source.CreateSnapshot(timeSeconds);
         return new ProjectionEvaluation(snapshot, trajectories, plan.Fingerprint);

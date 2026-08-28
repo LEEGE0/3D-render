@@ -83,6 +83,51 @@ public sealed class SceneProjectionControllerTests
         Assert.Equal(30, source.LastSettings?.MaximumUniformRate);
     }
 
+    [Theory]
+    [InlineData(60, 1)]
+    [InlineData(3, 30)]
+    public void Source_plan_with_a_noncanonical_uniform_rate_is_rejected_without_publishing(
+        int framesPerSecond,
+        int returnedUniformRate)
+    {
+        var source = new ControllableProjectionSource(framesPerSecond: framesPerSecond)
+        {
+            ReturnedUniformRate = returnedUniformRate,
+        };
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        var error = Assert.Throws<InvalidOperationException>(controller.ProjectCurrent);
+
+        Assert.Contains("uniform rate", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(top.Received);
+        Assert.Empty(world.Received);
+        Assert.Equal(0, source.CreateTrajectoriesCalls);
+    }
+
+    [Theory]
+    [InlineData(60, 30)]
+    [InlineData(3, 3)]
+    public void Source_plan_with_the_canonical_uniform_rate_is_published(
+        int framesPerSecond,
+        int returnedUniformRate)
+    {
+        var source = new ControllableProjectionSource(framesPerSecond: framesPerSecond)
+        {
+            ReturnedUniformRate = returnedUniformRate,
+        };
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        controller.ProjectCurrent();
+
+        Assert.Single(top.Received);
+        Assert.Single(world.Received);
+        Assert.Equal(1, source.CreateTrajectoriesCalls);
+    }
+
     [Fact]
     public void Action_only_revision_wraps_the_cached_set_and_reuses_actor_geometry()
     {
@@ -346,6 +391,8 @@ public sealed class SceneProjectionControllerTests
 
         public TrajectorySamplingSettings? LastSettings { get; private set; }
 
+        public int? ReturnedUniformRate { get; init; }
+
         public Action? BeforeNextSnapshot { get; set; }
 
         public bool ChangeMetadataBeforeEverySnapshot { get; init; }
@@ -378,7 +425,7 @@ public sealed class SceneProjectionControllerTests
         public TrajectorySamplePlan CreateTrajectorySamplePlan(TrajectorySamplingSettings settings)
         {
             LastSettings = settings;
-            var rate = Math.Min(FramesPerSecond, settings.MaximumUniformRate);
+            var rate = ReturnedUniformRate ?? Math.Min(FramesPerSecond, settings.MaximumUniformRate);
             return new TrajectorySamplePlan(settings.PolicyVersion, rate, [0, DurationSeconds]);
         }
 
