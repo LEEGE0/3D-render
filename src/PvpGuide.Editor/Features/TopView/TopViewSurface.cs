@@ -66,6 +66,8 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
 
     public TrajectoryOverlayGeometry? DisplayedTrajectoryGeometry => _trajectoryDisplay?.Geometry;
 
+    public TrajectoryOverlayPresentation? DisplayedTrajectoryPresentation => _trajectoryDisplay?.Presentation;
+
     public IReadOnlyDictionary<string, SemanticActorOverlay> DisplayedSemanticOverlays { get; private set; } =
         EmptySemanticOverlays;
 

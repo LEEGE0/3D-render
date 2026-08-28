@@ -1,4 +1,5 @@
 using Godot;
+using PvpGuide.Application.Projection;
 using PvpGuide.Application.Sessions;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Actors;
@@ -493,6 +494,8 @@ internal static class ActionLockOnRuntimeProbe
                 "Action 동일 시각 중복이 stale/range와 구분된 한글 안내로 표시되지 않았습니다.");
             SetSpinBoxValue(actionTimeInput, 0.2, "restored Action time");
 
+            RunLockOnMotionProbe(topViewSurface, actorsRoot);
+
             GD.Print(
                 "ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 " +
                 "undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1");
@@ -502,12 +505,583 @@ internal static class ActionLockOnRuntimeProbe
             GD.Print(
                 "ACTION_LOCK_ON_REVIEW_FIXES_READY empty_action_add=1 empty_lock_add=1 " +
                 "detailed_errors=1 observer_commit=1");
+            GD.Print(
+                "LOCK_ON_MOTION_READY snap=1 continuous=1 keyframe_only=1 coincidence=1 " +
+                "missing_target=1 shared_frame=1 trajectories=1 cache_reuse=1 nodes_reused=1");
         }
         finally
         {
             session.HistoryChanged -= historyHandler;
         }
     }
+
+    private static void RunLockOnMotionProbe(TopViewSurface existingTopView, Node3D existingActorsRoot)
+    {
+        const string probeActorId = "probe-host";
+        const string probeTargetId = "probe-target";
+        var document = CreateLockOnMotionDocument(probeActorId, probeTargetId);
+        var session = new DocumentSession(document);
+        var probeUiRoot = new Control { Name = "LockOnMotionProbeUi", Visible = false };
+        existingTopView.AddChild(probeUiRoot);
+        var topView = new TopViewSurface
+        {
+            Name = "LockOnMotionProbeTopView",
+            Size = new Vector2(640, 360),
+        };
+        probeUiRoot.AddChild(topView);
+        var timeSlider = new HSlider
+        {
+            Name = "LockOnMotionProbeTimeSlider",
+            MinValue = 0,
+            MaxValue = document.DurationSeconds,
+            Step = 1d / document.FramesPerSecond,
+            Size = new Vector2(480, 24),
+        };
+        probeUiRoot.AddChild(timeSlider);
+
+        var probeWorldRoot = new Node3D { Name = "LockOnMotionProbeWorld" };
+        existingActorsRoot.AddChild(probeWorldRoot);
+        var worldView = new WorldViewProjectionAdapter(probeWorldRoot);
+        var source = new CountingProjectionSource(session.ProjectionSource);
+        var topConsumer = new RecordingProjectionConsumer(topView);
+        var worldConsumer = new RecordingProjectionConsumer(worldView);
+        topView.Initialize(session);
+        using var projection = new SceneProjectionController(
+            source,
+            session.Playback,
+            topConsumer,
+            worldConsumer);
+
+        void OnSliderValueChanged(double timeSeconds)
+        {
+            session.Playback.Pause();
+            session.Playback.Seek(timeSeconds);
+        }
+
+        timeSlider.ValueChanged += OnSliderValueChanged;
+        try
+        {
+            projection.ProjectCurrent();
+            Require(source.MovementTrajectoryBuildCount == 1,
+                "bounded probe의 최초 projection이 궤적을 정확히 한 번 만들지 않았습니다.");
+            RequireSharedProjectionFrame(topConsumer, worldConsumer, "initial projection");
+
+            SeekWithSlider(timeSlider, 0.5);
+            RequireFacingProjection(
+                topConsumer,
+                worldConsumer,
+                probeWorldRoot,
+                probeActorId,
+                expectedYawDegrees: 15,
+                FacingResolutionKind.SnapTarget,
+                "Snap hold");
+
+            SeekWithSlider(timeSlider, 1.5);
+            RequireFacingProjection(
+                topConsumer,
+                worldConsumer,
+                probeWorldRoot,
+                probeActorId,
+                expectedYawDegrees: 135,
+                FacingResolutionKind.ContinuousTarget,
+                "Continuous tracking");
+            RequireTopViewTrajectoryPresentation(topView, topConsumer.LastFrame!, probeActorId, 1.5);
+
+            SeekWithSlider(timeSlider, 2.5);
+            RequireFacingProjection(
+                topConsumer,
+                worldConsumer,
+                probeWorldRoot,
+                probeActorId,
+                expectedYawDegrees: 85,
+                FacingResolutionKind.AuthoredKeyframeOnly,
+                "KeyframeOnly authored yaw");
+
+            SeekWithSlider(timeSlider, 3.5);
+            var coincidentFacing = topConsumer.LastFrame!.Snapshot.ActorFacings[probeActorId];
+            Require(coincidentFacing.ResolutionKind == FacingResolutionKind.CoincidentPrevious &&
+                    IsNear(coincidentFacing.YawDegrees, 270),
+                "위치 일치 시 이전 유효 방향 fallback이 hand-derived 270도를 보존하지 않았습니다.");
+            RequireSharedProjectionFrame(topConsumer, worldConsumer, "coincident seek");
+
+            var trajectoryNodes = GetTrajectoryNodes(probeWorldRoot, probeActorId);
+            var actorRoot = probeWorldRoot.GetNodeOrNull<Node3D>("Actor_probe_host")
+                ?? throw new InvalidOperationException("bounded probe actor root가 없습니다.");
+            var originalNodeCount = CountNodes(probeWorldRoot);
+            var originalSharedMesh = trajectoryNodes.SharedPath.Mesh;
+            var originalFreeMesh = trajectoryNodes.FreeTicks.Mesh;
+            var originalLockMesh = trajectoryNodes.LockTicks.Mesh;
+            var originalWorldVertices = ReadWorldVertices(trajectoryNodes.SharedPath)
+                .Concat(ReadWorldVertices(trajectoryNodes.FreeTicks))
+                .Concat(ReadWorldVertices(trajectoryNodes.LockTicks))
+                .ToArray();
+
+            var preview = new PvpGuide.Application.Editing.TransformPreview(
+                probeActorId,
+                "probe-host-t3.5",
+                new Position3(9, 2, -7),
+                200);
+            topView.ApplyPreview(preview);
+            worldView.ApplyPreview(preview);
+            Require(IsPosition(actorRoot.Position, 9, 2, -7) &&
+                    IsNear(actorRoot.Rotation.Y, -200 * Math.PI / 180),
+                "실제 WorldView preview가 actor root 이동·회전을 적용하지 않았습니다.");
+            var previewWorldVertices = ReadWorldVertices(trajectoryNodes.SharedPath)
+                .Concat(ReadWorldVertices(trajectoryNodes.FreeTicks))
+                .Concat(ReadWorldVertices(trajectoryNodes.LockTicks))
+                .ToArray();
+            RequireVectorSequence(originalWorldVertices, previewWorldVertices,
+                "actor preview 전후 world-fixed trajectory vertex");
+            topView.ApplyPreview(null);
+            worldView.ApplyPreview(null);
+
+            SeekWithSlider(timeSlider, 0.5);
+            SeekWithSlider(timeSlider, 2.5);
+            SeekWithSlider(timeSlider, 1.5);
+            Require(CountNodes(probeWorldRoot) == originalNodeCount &&
+                    ReferenceEquals(originalSharedMesh, trajectoryNodes.SharedPath.Mesh) &&
+                    ReferenceEquals(originalFreeMesh, trajectoryNodes.FreeTicks.Mesh) &&
+                    ReferenceEquals(originalLockMesh, trajectoryNodes.LockTicks.Mesh),
+                "반복 seek가 trajectory node/resource identity 또는 node count를 변경했습니다.");
+            Require(source.MovementTrajectoryBuildCount == 1,
+                "반복 seek가 motion cache를 우회해 궤적을 다시 만들었습니다.");
+
+            var buildCountBeforeAction = source.MovementTrajectoryBuildCount;
+            var frameBeforeAction = topConsumer.LastFrame!;
+            document.AddActionKeyframe(
+                probeActorId,
+                new ActionKeyframe("probe-action", 0.25, "runtime-probe"));
+            var frameAfterAction = topConsumer.LastFrame!;
+            Require(source.MovementTrajectoryBuildCount == buildCountBeforeAction &&
+                    ReferenceEquals(originalSharedMesh, trajectoryNodes.SharedPath.Mesh) &&
+                    ReferenceEquals(originalFreeMesh, trajectoryNodes.FreeTicks.Mesh) &&
+                    ReferenceEquals(originalLockMesh, trajectoryNodes.LockTicks.Mesh),
+                "Action-only mutation이 trajectory geometry 또는 mesh resource를 다시 만들었습니다.");
+            RequireSharedProjectionFrame(topConsumer, worldConsumer, "Action-only mutation");
+            Require(!ReferenceEquals(frameBeforeAction, frameAfterAction) &&
+                    frameAfterAction.Snapshot.Revision == document.Revision &&
+                    ReferenceEquals(frameBeforeAction.Trajectories.Actors, frameAfterAction.Trajectories.Actors),
+                "Action-only mutation이 새 revision의 frame을 Top/World에 전달하지 않았거나 geometry cache를 잃었습니다.");
+
+            var buildCountBeforeMotion = source.MovementTrajectoryBuildCount;
+            var frameBeforeMotion = topConsumer.LastFrame!;
+            var finalTransform = document.Actors
+                .Single(actor => actor.ActorId == probeActorId)
+                .TransformKeyframes
+                .Single(frame => frame.Id == "probe-host-t4");
+            Require(document.ReplaceTransformKeyframe(
+                    probeActorId,
+                    finalTransform,
+                    new TransformKeyframe(
+                        finalTransform.Id,
+                        finalTransform.TimeSeconds,
+                        new Position3(1, 0, 0),
+                        140)),
+                "motion mutation fixture를 적용하지 못했습니다.");
+            var frameAfterMotion = topConsumer.LastFrame!;
+            Require(source.MovementTrajectoryBuildCount == buildCountBeforeMotion + 1,
+                "motion mutation 뒤 trajectory build count가 정확히 1 증가하지 않았습니다.");
+            RequireSharedProjectionFrame(topConsumer, worldConsumer, "motion mutation");
+            Require(!ReferenceEquals(frameBeforeMotion, frameAfterMotion) &&
+                    frameAfterMotion.Snapshot.Revision == document.Revision &&
+                    frameAfterMotion.Snapshot.MotionRevision == document.MotionRevision &&
+                    !ReferenceEquals(frameBeforeMotion.Trajectories.Actors, frameAfterMotion.Trajectories.Actors),
+                "motion mutation이 새 revision/motion revision frame과 새 geometry payload를 전달하지 않았습니다.");
+
+            RequireMissingTargetBadge(probeUiRoot, probeWorldRoot);
+            RequireZeroDurationProjection(probeUiRoot, probeWorldRoot);
+        }
+        finally
+        {
+            timeSlider.ValueChanged -= OnSliderValueChanged;
+            projection.Dispose();
+            session.CancelPreview();
+            topView.DetachSession();
+            probeUiRoot.QueueFree();
+            probeWorldRoot.QueueFree();
+        }
+    }
+
+    private static SceneDocument CreateLockOnMotionDocument(string actorId, string targetActorId) =>
+        SceneDocument.Create(
+            "lock-on-motion-runtime",
+            "Lock-on motion runtime",
+            null,
+            durationSeconds: 4,
+            framesPerSecond: 30,
+            [
+                new ActorTrack(
+                    actorId,
+                    "Probe Host",
+                    "교육용 배우",
+                    [
+                        new TransformKeyframe("probe-host-t0", 0, new Position3(0, 0, 0), 10),
+                        new TransformKeyframe("probe-host-t1", 1, new Position3(0, 0, 0), 40),
+                        new TransformKeyframe("probe-host-t2", 2, new Position3(0, 0, 0), 70),
+                        new TransformKeyframe("probe-host-t3", 3, new Position3(0, 0, 0), 100),
+                        new TransformKeyframe("probe-host-t3.5", 3.5, new Position3(0, 0, 0), 115),
+                        new TransformKeyframe("probe-host-t4", 4, new Position3(0, 0, 0), 130),
+                    ],
+                    [],
+                    [
+                        new LockOnKeyframe("probe-snap", 0, true, targetActorId, 15, LockOnTrackingMode.Snap),
+                        new LockOnKeyframe("probe-continuous", 1, true, targetActorId, 0, LockOnTrackingMode.Continuous),
+                        new LockOnKeyframe("probe-keyframe-only", 2, true, targetActorId, 0, LockOnTrackingMode.KeyframeOnly),
+                        new LockOnKeyframe("probe-coincident", 3, true, targetActorId, 0, LockOnTrackingMode.Continuous),
+                    ]),
+                new ActorTrack(
+                    targetActorId,
+                    "Probe Target",
+                    "교육용 대상",
+                    [
+                        new TransformKeyframe("probe-target-t0", 0, new Position3(4, 0, 0), 0),
+                        new TransformKeyframe("probe-target-t1", 1, new Position3(0, 0, 4), 0),
+                        new TransformKeyframe("probe-target-t2", 2, new Position3(-4, 0, 0), 0),
+                        new TransformKeyframe("probe-target-t3", 3, new Position3(0, 0, -4), 0),
+                        new TransformKeyframe("probe-target-t3.5", 3.5, new Position3(0, 0, 0), 0),
+                        new TransformKeyframe("probe-target-t4", 4, new Position3(4, 0, 0), 0),
+                    ],
+                    [],
+                    []),
+            ]);
+
+    private static void SeekWithSlider(HSlider slider, double timeSeconds)
+    {
+        var signalCount = 0;
+        var observed = double.NaN;
+        void Observe(double value)
+        {
+            signalCount++;
+            observed = value;
+        }
+
+        slider.ValueChanged += Observe;
+        try
+        {
+            slider.Value = timeSeconds;
+        }
+        finally
+        {
+            slider.ValueChanged -= Observe;
+        }
+
+        Require(signalCount == 1 && IsNear(observed, timeSeconds) && IsNear(slider.Value, timeSeconds),
+            $"bounded HSlider seek가 {timeSeconds}초 ValueChanged를 정확히 한 번 전달하지 않았습니다.");
+    }
+
+    private static void RequireFacingProjection(
+        RecordingProjectionConsumer topConsumer,
+        RecordingProjectionConsumer worldConsumer,
+        Node3D worldRoot,
+        string actorId,
+        double expectedYawDegrees,
+        FacingResolutionKind expectedResolution,
+        string stage)
+    {
+        RequireSharedProjectionFrame(topConsumer, worldConsumer, stage);
+        var frame = topConsumer.LastFrame!;
+        var facing = frame.Snapshot.ActorFacings[actorId];
+        var actorRoot = worldRoot.GetNodeOrNull<Node3D>("Actor_probe_host")
+            ?? throw new InvalidOperationException($"{stage}: WorldView actor root가 없습니다.");
+        Require(IsNear(facing.YawDegrees, expectedYawDegrees) &&
+                facing.ResolutionKind == expectedResolution &&
+                IsNear(actorRoot.Rotation.Y, -expectedYawDegrees * Math.PI / 180),
+            $"{stage}: hand-derived facing 또는 exact actor root Rotation.Y가 다릅니다.");
+    }
+
+    private static void RequireSharedProjectionFrame(
+        RecordingProjectionConsumer topConsumer,
+        RecordingProjectionConsumer worldConsumer,
+        string stage) =>
+        Require(topConsumer.LastFrame is not null &&
+                ReferenceEquals(topConsumer.LastFrame, worldConsumer.LastFrame),
+            $"{stage}: TopView와 WorldView가 동일 SceneProjectionFrame reference를 받지 않았습니다.");
+
+    private static void RequireTopViewTrajectoryPresentation(
+        TopViewSurface topView,
+        SceneProjectionFrame frame,
+        string actorId,
+        double currentTimeSeconds)
+    {
+        Require(ReferenceEquals(topView.DisplayedTrajectories, frame.Trajectories),
+            "TopView DisplayedTrajectories가 controller frame의 실제 trajectory set이 아닙니다.");
+        var trajectory = topView.DisplayedTrajectories!.Actors[actorId];
+        var snapSample = trajectory.Samples.Single(sample => IsNear(sample.TimeSeconds, 0.5));
+        var continuousSample = trajectory.Samples.Single(sample => IsNear(sample.TimeSeconds, 1.5));
+        var keyframeOnlySample = trajectory.Samples.Single(sample => IsNear(sample.TimeSeconds, 2.5));
+        Require(IsNear(snapSample.FreeYawDegrees, 25) && IsNear(snapSample.LockOnFacing.YawDegrees, 15) &&
+                IsNear(continuousSample.FreeYawDegrees, 55) &&
+                IsNear(continuousSample.LockOnFacing.YawDegrees, 135) &&
+                IsNear(keyframeOnlySample.FreeYawDegrees, 85) &&
+                IsNear(keyframeOnlySample.LockOnFacing.YawDegrees, 85),
+            "TopView free/Lock-on trajectory samples가 hand-derived yaw를 보존하지 않았습니다.");
+
+        var presentationDisplay = topView.DisplayedTrajectoryPresentation
+            ?? throw new InvalidOperationException("TopView 실제 trajectory presentation이 없습니다.");
+        Require(ReferenceEquals(presentationDisplay.Geometry, topView.DisplayedTrajectoryGeometry),
+            "TopView presentation 진단 seam이 현재 displayed geometry를 가리키지 않습니다.");
+        var presentation = presentationDisplay.Actors[actorId];
+        var allPresented = presentation.SharedPath
+            .Select(point => (point.TimeSeconds, point.Brightness))
+            .Concat(presentation.FreeFacingTicks.Select(tick => (tick.TimeSeconds, tick.Brightness)))
+            .Concat(presentation.LockOnFacingTicks.Select(tick => (tick.TimeSeconds, tick.Brightness)))
+            .ToArray();
+        Require(allPresented.Any(item => item.TimeSeconds <= currentTimeSeconds) &&
+                allPresented.Any(item => item.TimeSeconds > currentTimeSeconds) &&
+                allPresented.Where(item => item.TimeSeconds <= currentTimeSeconds)
+                    .All(item => IsNear(item.Brightness, 1)) &&
+                allPresented.Where(item => item.TimeSeconds > currentTimeSeconds)
+                    .All(item => IsNear(item.Brightness, 0.45)),
+            "TopView current/future trajectory presentation 밝기가 1/0.45 계약과 다릅니다.");
+    }
+
+    private static TrajectoryNodes GetTrajectoryNodes(Node3D worldRoot, string actorId)
+    {
+        var overlayRoot = worldRoot.GetNodeOrNull<Node3D>("TrajectoryOverlayRoot")
+            ?? throw new InvalidOperationException("실제 TrajectoryOverlayRoot가 없습니다.");
+        var containerName = $"Trajectory_{actorId.Replace('-', '_')}";
+        var container = overlayRoot.GetNodeOrNull<Node3D>(containerName)
+            ?? throw new InvalidOperationException($"실제 trajectory actor container '{containerName}'가 없습니다.");
+        return new TrajectoryNodes(
+            container.GetNodeOrNull<MeshInstance3D>("SharedTrajectory")
+                ?? throw new InvalidOperationException("SharedTrajectory mesh가 없습니다."),
+            container.GetNodeOrNull<MeshInstance3D>("FreeFacingTicks")
+                ?? throw new InvalidOperationException("FreeFacingTicks mesh가 없습니다."),
+            container.GetNodeOrNull<MeshInstance3D>("LockOnFacingTicks")
+                ?? throw new InvalidOperationException("LockOnFacingTicks mesh가 없습니다."));
+    }
+
+    private static Vector3[] ReadWorldVertices(MeshInstance3D instance)
+    {
+        var mesh = instance.Mesh
+            ?? throw new InvalidOperationException($"{instance.Name}의 mesh resource가 없습니다.");
+        var vertices = new List<Vector3>();
+        for (var surfaceIndex = 0; surfaceIndex < mesh.GetSurfaceCount(); surfaceIndex++)
+        {
+            var arrays = mesh.SurfaceGetArrays(surfaceIndex);
+            foreach (var local in arrays[(int)Mesh.ArrayType.Vertex].AsVector3Array())
+            {
+                vertices.Add(instance.GlobalTransform * local);
+            }
+        }
+
+        Require(vertices.Count > 0, $"{instance.Name}의 실제 mesh vertex가 비어 있습니다.");
+        return vertices.ToArray();
+    }
+
+    private static void RequireVectorSequence(
+        IReadOnlyList<Vector3> expected,
+        IReadOnlyList<Vector3> actual,
+        string stage)
+    {
+        Require(expected.Count == actual.Count, $"{stage}: vertex 수가 변경되었습니다.");
+        for (var index = 0; index < expected.Count; index++)
+        {
+            Require(expected[index].IsEqualApprox(actual[index]),
+                $"{stage}: {index}번째 world vertex가 변경되었습니다.");
+        }
+    }
+
+    private static int CountNodes(Node node)
+    {
+        var count = 1;
+        foreach (var child in node.GetChildren())
+        {
+            count += CountNodes(child);
+        }
+
+        return count;
+    }
+
+    private static void RequireMissingTargetBadge(Control uiParent, Node3D worldParent)
+    {
+        const string documentId = "missing-target-runtime";
+        const string actorId = "missing-host";
+        var topView = new TopViewSurface { Name = "MissingTargetTopView", Size = new Vector2(320, 180) };
+        uiParent.AddChild(topView);
+        var worldRoot = new Node3D { Name = "MissingTargetWorld" };
+        worldParent.AddChild(worldRoot);
+        try
+        {
+            var facing = new EvaluatedActorFacing(
+                45,
+                FacingResolutionKind.TargetUnavailableFallback,
+                "missing-lock");
+            var snapshot = new SceneSnapshot(
+                documentId,
+                revision: 0,
+                timeSeconds: 0,
+                new Dictionary<string, EvaluatedTransform>(StringComparer.Ordinal)
+                {
+                    [actorId] = new EvaluatedTransform(new Position3(0, 0, 0), 45),
+                },
+                new Dictionary<string, EvaluatedActorTimelineState>(StringComparer.Ordinal)
+                {
+                    [actorId] = new EvaluatedActorTimelineState(
+                        new EvaluatedActionState(null, null),
+                        new EvaluatedLockOnState(
+                            "missing-lock",
+                            true,
+                            "ghost-target",
+                            0,
+                            LockOnTrackingMode.Continuous)),
+                },
+                new Dictionary<string, EvaluatedActorFacing>(StringComparer.Ordinal)
+                {
+                    [actorId] = facing,
+                },
+                motionRevision: 0);
+            var sample = new MovementTrajectorySample(
+                0,
+                new Position3(0, 0, 0),
+                45,
+                facing,
+                TrajectoryAnchorKind.ActorLockOn);
+            var trajectories = new MovementTrajectorySet(
+                documentId,
+                revision: 0,
+                motionRevision: 0,
+                "runtime/missing-target",
+                uniformRate: 30,
+                new Dictionary<string, ActorMovementTrajectory>(StringComparer.Ordinal)
+                {
+                    [actorId] = new ActorMovementTrajectory(actorId, [sample], segmentSteps: 0),
+                },
+                segmentSteps: 0);
+            var frame = new SceneProjectionFrame(snapshot, trajectories, trajectories.SamplingPolicyFingerprint);
+            var worldView = new WorldViewProjectionAdapter(worldRoot);
+            topView.Apply(frame);
+            worldView.Apply(frame);
+
+            var topBadge = topView.DisplayedSemanticOverlays[actorId].LockBadge;
+            var worldBadge = worldRoot
+                .GetNodeOrNull<Label3D>("Actor_missing_host/OverlayRoot/LockBadge");
+            Require(topBadge == "LOCK · ghost-target · 대상 없음" &&
+                    worldBadge is { Visible: true, Text: "LOCK · ghost-target · 대상 없음" },
+                "synthetic missing-target snapshot이 Top/World 대상 없음 badge를 표시하지 않았습니다.");
+        }
+        finally
+        {
+            topView.QueueFree();
+            worldRoot.QueueFree();
+        }
+    }
+
+    private static void RequireZeroDurationProjection(Control uiParent, Node3D worldParent)
+    {
+        const string actorId = "zero-host";
+        var document = SceneDocument.Create(
+            "zero-duration-runtime",
+            "Zero duration runtime",
+            null,
+            durationSeconds: 0,
+            framesPerSecond: 30,
+            [new ActorTrack(
+                actorId,
+                "Zero Host",
+                "교육용 배우",
+                [new TransformKeyframe("zero-origin", 0, new Position3(0, 0, 0), 0)],
+                [],
+                [])]);
+        var session = new DocumentSession(document);
+        var topView = new TopViewSurface { Name = "ZeroDurationTopView", Size = new Vector2(320, 180) };
+        uiParent.AddChild(topView);
+        var worldRoot = new Node3D { Name = "ZeroDurationWorld" };
+        worldParent.AddChild(worldRoot);
+        topView.Initialize(session);
+        var worldView = new WorldViewProjectionAdapter(worldRoot);
+        using var projection = new SceneProjectionController(
+            session.ProjectionSource,
+            session.Playback,
+            topView,
+            worldView);
+        try
+        {
+            projection.ProjectCurrent();
+            var nodes = GetTrajectoryNodes(worldRoot, actorId);
+            Require(!session.Playback.IsPlaying && IsNear(session.Playback.CurrentTimeSeconds, 0) &&
+                    !session.Playback.Play(),
+                "duration 0 fixture가 paused 0초 상태를 유지하지 않았습니다.");
+            Require(MeshUvsAreZero(nodes.FreeTicks) && MeshUvsAreZero(nodes.LockTicks) &&
+                    IsNear(ReadCurrentTimeUniform(nodes.SharedPath), 0) &&
+                    IsNear(ReadCurrentTimeUniform(nodes.FreeTicks), 0) &&
+                    IsNear(ReadCurrentTimeUniform(nodes.LockTicks), 0),
+                "duration 0 fixture의 trajectory UV/uniform이 0이 아닙니다.");
+        }
+        finally
+        {
+            projection.Dispose();
+            topView.DetachSession();
+            topView.QueueFree();
+            worldRoot.QueueFree();
+        }
+    }
+
+    private static bool MeshUvsAreZero(MeshInstance3D instance)
+    {
+        var mesh = instance.Mesh
+            ?? throw new InvalidOperationException($"{instance.Name} mesh resource가 없습니다.");
+        var uvCount = 0;
+        for (var surfaceIndex = 0; surfaceIndex < mesh.GetSurfaceCount(); surfaceIndex++)
+        {
+            var arrays = mesh.SurfaceGetArrays(surfaceIndex);
+            var uvs = arrays[(int)Mesh.ArrayType.TexUV].AsVector2Array();
+            uvCount += uvs.Length;
+            if (uvs.Any(uv => !IsNear(uv.X, 0) || !IsNear(uv.Y, 0)))
+            {
+                return false;
+            }
+        }
+
+        return uvCount > 0;
+    }
+
+    private static double ReadCurrentTimeUniform(MeshInstance3D instance)
+    {
+        var material = instance.MaterialOverride as ShaderMaterial
+            ?? throw new InvalidOperationException($"{instance.Name}의 ShaderMaterial이 없습니다.");
+        return material.GetShaderParameter("current_time_normalized").AsDouble();
+    }
+
+    private sealed class CountingProjectionSource(ISceneProjectionSource inner) : ISceneProjectionSource
+    {
+        public int MovementTrajectoryBuildCount { get; private set; }
+
+        public event EventHandler<SceneDocumentChangedEventArgs> Changed
+        {
+            add => inner.Changed += value;
+            remove => inner.Changed -= value;
+        }
+
+        public SceneSnapshot CreateSnapshot(double timeSeconds) => inner.CreateSnapshot(timeSeconds);
+
+        public ProjectionSourceMetadata GetProjectionMetadata() => inner.GetProjectionMetadata();
+
+        public TrajectorySamplePlan CreateTrajectorySamplePlan(TrajectorySamplingSettings settings) =>
+            inner.CreateTrajectorySamplePlan(settings);
+
+        public MovementTrajectorySet CreateMovementTrajectories(TrajectorySamplePlan plan)
+        {
+            MovementTrajectoryBuildCount++;
+            return inner.CreateMovementTrajectories(plan);
+        }
+    }
+
+    private sealed class RecordingProjectionConsumer(ISceneProjectionConsumer inner) : ISceneProjectionConsumer
+    {
+        public SceneProjectionFrame? LastFrame { get; private set; }
+
+        public void Apply(SceneProjectionFrame frame)
+        {
+            LastFrame = frame;
+            inner.Apply(frame);
+        }
+    }
+
+    private sealed record TrajectoryNodes(
+        MeshInstance3D SharedPath,
+        MeshInstance3D FreeTicks,
+        MeshInstance3D LockTicks);
 
     private static void RequireInitialState(
         SceneDocument document,
@@ -764,6 +1338,9 @@ internal static class ActionLockOnRuntimeProbe
         frame.TrackingMode == trackingMode;
 
     private static bool IsNear(double actual, double expected) => Math.Abs(actual - expected) <= 0.0001;
+
+    private static bool IsPosition(Vector3 actual, double x, double y, double z) =>
+        IsNear(actual.X, x) && IsNear(actual.Y, y) && IsNear(actual.Z, z);
 
     private static void Require(bool condition, string message)
     {
