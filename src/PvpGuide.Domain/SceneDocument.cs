@@ -333,6 +333,22 @@ public sealed class SceneDocument : ISceneSnapshotSource
             MotionRevision);
     }
 
+    public TrajectorySamplePlan CreateTrajectorySamplePlan(TrajectorySamplingSettings settings) =>
+        MovementTrajectoryEvaluator.CreatePlan(
+            DurationSeconds,
+            FramesPerSecond,
+            _readOnlyActors,
+            settings);
+
+    public MovementTrajectorySet CreateMovementTrajectories(TrajectorySamplePlan plan) =>
+        MovementTrajectoryEvaluator.Evaluate(
+            DocumentId,
+            Revision,
+            MotionRevision,
+            DurationSeconds,
+            _readOnlyActors,
+            plan);
+
     private void EnsureTimeWithinDocument(double timeSeconds, string parameterName)
     {
         if (!double.IsFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > DurationSeconds)

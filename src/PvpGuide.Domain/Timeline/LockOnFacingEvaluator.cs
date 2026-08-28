@@ -114,20 +114,10 @@ public static class LockOnFacingEvaluator
         {
             var left = EvaluateRelative(actor, target, times[index]);
             var right = EvaluateRelative(actor, target, times[index + 1]);
-
-            if (!IsCoincident(right))
+            if (TryResolveContinuousSegment(left, right, out previousRelative))
             {
-                previousRelative = right;
                 return true;
             }
-
-            if (IsCoincident(left))
-            {
-                continue;
-            }
-
-            previousRelative = FindValidToCoincidentBoundary(left, right);
-            return true;
         }
 
         previousRelative = default;
@@ -151,6 +141,27 @@ public static class LockOnFacingEvaluator
 
     private static RelativePosition EvaluateRelative(ActorTrack actor, ActorTrack target, double timeSeconds) =>
         RelativePosition.Between(actor.Evaluate(timeSeconds).Position, target.Evaluate(timeSeconds).Position);
+
+    internal static bool TryResolveContinuousSegment(
+        RelativePosition left,
+        RelativePosition right,
+        out RelativePosition latestValid)
+    {
+        if (!IsCoincident(right))
+        {
+            latestValid = right;
+            return true;
+        }
+
+        if (IsCoincident(left))
+        {
+            latestValid = default;
+            return false;
+        }
+
+        latestValid = FindValidToCoincidentBoundary(left, right);
+        return true;
+    }
 
     private static RelativePosition FindValidToCoincidentBoundary(
         RelativePosition left,
@@ -273,10 +284,10 @@ public static class LockOnFacingEvaluator
         }
     }
 
-    private static bool IsCoincident(RelativePosition relative) =>
+    internal static bool IsCoincident(RelativePosition relative) =>
         relative.SquaredLength <= CoincidenceEpsilonSquared;
 
-    private static double ResolveTargetYaw(
+    internal static double ResolveTargetYaw(
         RelativePosition relative,
         double offsetDegrees,
         double authoredFallbackYawDegrees)
@@ -288,7 +299,7 @@ public static class LockOnFacingEvaluator
             : NormalizeYaw(authoredFallbackYawDegrees);
     }
 
-    private static double NormalizeYaw(double yawDegrees)
+    internal static double NormalizeYaw(double yawDegrees)
     {
         var normalized = yawDegrees % 360;
         if (normalized < 0)
@@ -299,7 +310,7 @@ public static class LockOnFacingEvaluator
         return normalized == 0 ? 0 : normalized;
     }
 
-    private readonly record struct RelativePosition(double X, double Z)
+    internal readonly record struct RelativePosition(double X, double Z)
     {
         public double SquaredLength => (X * X) + (Z * Z);
 
