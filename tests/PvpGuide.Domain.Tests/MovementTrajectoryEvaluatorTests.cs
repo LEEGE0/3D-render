@@ -191,6 +191,50 @@ public sealed class MovementTrajectoryEvaluatorTests
     }
 
     [Fact]
+    public void Sparse_target_graph_keeps_unrelated_same_time_keys_out_of_the_host_sweep()
+    {
+        var baseDocument = CreateSparseDiagnosticDocument([]);
+        var expandedDocument = CreateSparseDiagnosticDocument(
+            [
+                Track("bystander-a", [
+                    Frame("a-0", 0, 10, 0, 0),
+                    Frame("a-quarter", 0.25, 11, 0, 0),
+                    Frame("a-three-quarters", 0.75, 12, 0, 0),
+                    Frame("a-1", 1, 13, 0, 0),
+                ]),
+                Track("bystander-b", [
+                    Frame("b-0", 0, -10, 0, 0),
+                    Frame("b-quarter", 0.25, -11, 0, 0),
+                    Frame("b-three-quarters", 0.75, -12, 0, 0),
+                    Frame("b-1", 1, -13, 0, 0),
+                ]),
+            ]);
+        var plan = new TrajectorySamplePlan("v1", 2, [0d, 1d]);
+
+        var baseline = baseDocument.CreateMovementTrajectories(plan);
+        var expanded = expandedDocument.CreateMovementTrajectories(plan);
+
+        Assert.Equal(9, baseline.Actors["host"].SegmentSteps);
+        Assert.Equal(baseline.Actors["host"].SegmentSteps, expanded.Actors["host"].SegmentSteps);
+        Assert.Equal(14, baseline.SegmentSteps);
+        Assert.Equal(14, expanded.SegmentSteps - baseline.SegmentSteps);
+    }
+
+    [Fact]
+    public void Empty_arbitrary_plan_returns_empty_actor_geometry_without_sweep_work()
+    {
+        var document = CreatePairedDocument();
+        var plan = new TrajectorySamplePlan("v1", 30, []);
+
+        var trajectories = document.CreateMovementTrajectories(plan);
+
+        Assert.Equal(document.Actors.Count, trajectories.Actors.Count);
+        Assert.All(trajectories.Actors.Values, actor => Assert.Empty(actor.Samples));
+        Assert.All(trajectories.Actors.Values, actor => Assert.Equal(0, actor.SegmentSteps));
+        Assert.Equal(0, trajectories.SegmentSteps);
+    }
+
+    [Fact]
     public void Trajectory_values_are_defensive_read_only_and_validate_nested_invariants()
     {
         var sourceTimes = new[] { 0d, 1d };
@@ -301,6 +345,27 @@ public sealed class MovementTrajectoryEvaluatorTests
                 Frame("target-2", 2, 0, 2, 0),
             ]),
         ]);
+
+    private static SceneDocument CreateSparseDiagnosticDocument(IEnumerable<ActorTrack> bystanders) =>
+        SceneDocument.Create(
+            "sparse-diagnostic",
+            "Sparse diagnostic",
+            null,
+            1,
+            30,
+            [
+                new ActorTrack(
+                    "host", "Host", "Hero",
+                    [Frame("host-0", 0, 0, 0, 0), Frame("host-1", 1, 1, 0, 0)],
+                    [],
+                    [new LockOnKeyframe("host-lock", 0, true, "target", 0, LockOnTrackingMode.Continuous)]),
+                Track("target", [
+                    Frame("target-0", 0, 0, 2, 0),
+                    Frame("target-half", 0.5, 0.5, 2, 0),
+                    Frame("target-1", 1, 1, 2, 0),
+                ]),
+                .. bystanders,
+            ]);
 
     private static ActorTrack Track(string actorId, IEnumerable<TransformKeyframe> frames) =>
         new(actorId, actorId, actorId, frames, [], []);

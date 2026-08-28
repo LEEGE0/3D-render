@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using PvpGuide.Domain.Actors;
 
 namespace PvpGuide.Domain.Timeline;
@@ -84,13 +85,13 @@ internal static class MovementTrajectoryEvaluator
             }
         }
 
-        var actorsById = actors.ToDictionary(actor => actor.ActorId, StringComparer.Ordinal);
+        var evaluation = TrajectoryEvaluationContext.Create(actors, plan);
         var actorTrajectories = new Dictionary<string, ActorMovementTrajectory>(actors.Count, StringComparer.Ordinal);
         long totalSegmentSteps = 0;
-        foreach (var actor in actors)
+        foreach (var actorMetadata in evaluation.Actors)
         {
-            var trajectory = EvaluateActor(actor, actorsById, plan);
-            actorTrajectories.Add(actor.ActorId, trajectory);
+            var trajectory = EvaluateActor(actorMetadata, evaluation.ActorsById, plan);
+            actorTrajectories.Add(actorMetadata.Actor.ActorId, trajectory);
             totalSegmentSteps += trajectory.SegmentSteps;
         }
 
@@ -104,59 +105,36 @@ internal static class MovementTrajectoryEvaluator
     }
 
     private static ActorMovementTrajectory EvaluateActor(
-        ActorTrack actor,
+        ActorEvaluationMetadata metadata,
         IReadOnlyDictionary<string, ActorTrack> actorsById,
         TrajectorySamplePlan plan)
     {
+        var actor = metadata.Actor;
         if (plan.OrderedTimes.Count == 0)
         {
             return new ActorMovementTrajectory(actor.ActorId, [], 0);
         }
 
-        var lastSampleTime = plan.OrderedTimes[^1];
-        var canonicalTimes = new SortedSet<double>(plan.OrderedTimes);
-        foreach (var candidate in actorsById.Values)
-        {
-            foreach (var transform in candidate.TransformKeyframes)
-            {
-                if (transform.TimeSeconds <= lastSampleTime)
-                {
-                    canonicalTimes.Add(transform.TimeSeconds);
-                }
-            }
-        }
-
-        foreach (var lockOn in actor.LockOnKeyframes)
-        {
-            if (lockOn.TimeSeconds <= lastSampleTime)
-            {
-                canonicalTimes.Add(lockOn.TimeSeconds);
-            }
-        }
-
         var sampleTimes = plan.OrderedTimes.ToHashSet();
-        var actorTransformTimes = actor.TransformKeyframes
-            .Select(frame => frame.TimeSeconds)
-            .ToHashSet();
-        var transformTimesByActorId = actorsById.ToDictionary(
-            pair => pair.Key,
-            pair => pair.Value.TransformKeyframes.Select(frame => frame.TimeSeconds).ToHashSet(),
-            StringComparer.Ordinal);
-        var actorLockOnTimes = actor.LockOnKeyframes
-            .Select(frame => frame.TimeSeconds)
-            .ToHashSet();
-        var transformCursors = actorsById.ToDictionary(
-            pair => pair.Key,
-            pair => new ForwardTransformCursor(pair.Value.TransformKeyframes),
-            StringComparer.Ordinal);
+        var transformCursors = new Dictionary<string, ForwardTransformCursor>(StringComparer.Ordinal)
+        {
+            [actor.ActorId] = new ForwardTransformCursor(actor.TransformKeyframes),
+        };
+        foreach (var (targetActorId, target) in metadata.ReferencedTargets)
+        {
+            transformCursors.TryAdd(
+                targetActorId,
+                new ForwardTransformCursor(target.TransformKeyframes));
+        }
+
         var lockOnCursor = new ForwardLockOnCursor(actor.LockOnKeyframes);
         var facingSweep = new MovementTrajectoryFacingSweep(actorsById);
         var samples = new List<MovementTrajectorySample>(plan.OrderedTimes.Count);
-        long segmentSteps = 0;
-        var firstCanonical = true;
+        long canonicalVisits = 0;
 
-        foreach (var timeSeconds in canonicalTimes)
+        foreach (var timeSeconds in metadata.CanonicalTimes)
         {
+            canonicalVisits++;
             var authored = transformCursors[actor.ActorId].Evaluate(timeSeconds);
             var lockOn = lockOnCursor.Evaluate(timeSeconds);
             var targetTransform = lockOn.TargetActorId is { } targetActorId &&
@@ -164,32 +142,25 @@ internal static class MovementTrajectoryEvaluator
                 ? targetCursor.Evaluate(timeSeconds)
                 : (EvaluatedTransform?)null;
             var facing = facingSweep.Advance(authored, lockOn, targetTransform);
-
-            if (!firstCanonical)
-            {
-                segmentSteps++;
-            }
-
-            firstCanonical = false;
             if (!sampleTimes.Contains(timeSeconds))
             {
                 continue;
             }
 
             var anchorKind = TrajectoryAnchorKind.None;
-            if (actorTransformTimes.Contains(timeSeconds))
+            if (metadata.TransformTimesByActorId[actor.ActorId].Contains(timeSeconds))
             {
                 anchorKind |= TrajectoryAnchorKind.ActorTransform;
             }
 
-            if (actorLockOnTimes.Contains(timeSeconds))
+            if (metadata.LockOnTimes.Contains(timeSeconds))
             {
                 anchorKind |= TrajectoryAnchorKind.ActorLockOn;
             }
 
             if (lockOn.Enabled &&
                 lockOn.TargetActorId is { } activeTargetId &&
-                transformTimesByActorId.TryGetValue(activeTargetId, out var activeTargetTransformTimes) &&
+                metadata.TransformTimesByActorId.TryGetValue(activeTargetId, out var activeTargetTransformTimes) &&
                 activeTargetTransformTimes.Contains(timeSeconds))
             {
                 anchorKind |= TrajectoryAnchorKind.ActiveTargetTransform;
@@ -203,8 +174,109 @@ internal static class MovementTrajectoryEvaluator
                 anchorKind));
         }
 
+        var segmentSteps = canonicalVisits +
+                           lockOnCursor.SegmentSteps +
+                           facingSweep.SegmentSteps +
+                           transformCursors.Values.Sum(cursor => cursor.SegmentSteps);
         return new ActorMovementTrajectory(actor.ActorId, samples, segmentSteps);
     }
+
+    private sealed class TrajectoryEvaluationContext
+    {
+        private TrajectoryEvaluationContext(
+            IReadOnlyDictionary<string, ActorTrack> actorsById,
+            IReadOnlyList<ActorEvaluationMetadata> actors)
+        {
+            ActorsById = actorsById;
+            Actors = actors;
+        }
+
+        public IReadOnlyDictionary<string, ActorTrack> ActorsById { get; }
+
+        public IReadOnlyList<ActorEvaluationMetadata> Actors { get; }
+
+        public static TrajectoryEvaluationContext Create(
+            IReadOnlyList<ActorTrack> actors,
+            TrajectorySamplePlan plan)
+        {
+            var actorsById = actors.ToFrozenDictionary(
+                actor => actor.ActorId,
+                StringComparer.Ordinal);
+            var transformTimesByActorId = actors.ToFrozenDictionary(
+                actor => actor.ActorId,
+                actor => (IReadOnlySet<double>)actor.TransformKeyframes
+                    .Select(frame => frame.TimeSeconds)
+                    .ToFrozenSet(),
+                StringComparer.Ordinal);
+
+            var actorMetadata = new List<ActorEvaluationMetadata>(actors.Count);
+            foreach (var actor in actors)
+            {
+                var referencedTargets = actor.LockOnKeyframes
+                    .Select(frame => frame.TargetActorId)
+                    .OfType<string>()
+                    .Distinct(StringComparer.Ordinal)
+                    .Where(actorsById.ContainsKey)
+                    .ToFrozenDictionary(
+                        targetActorId => targetActorId,
+                        targetActorId => actorsById[targetActorId],
+                        StringComparer.Ordinal);
+
+                var canonicalTimes = new SortedSet<double>(plan.OrderedTimes);
+                if (plan.OrderedTimes.Count > 0)
+                {
+                    var lastSampleTime = plan.OrderedTimes[^1];
+                    AddTimesThrough(
+                        actor.TransformKeyframes.Select(frame => frame.TimeSeconds),
+                        lastSampleTime,
+                        canonicalTimes);
+                    AddTimesThrough(
+                        actor.LockOnKeyframes.Select(frame => frame.TimeSeconds),
+                        lastSampleTime,
+                        canonicalTimes);
+                    foreach (var target in referencedTargets.Values)
+                    {
+                        AddTimesThrough(
+                            target.TransformKeyframes.Select(frame => frame.TimeSeconds),
+                            lastSampleTime,
+                            canonicalTimes);
+                    }
+                }
+
+                actorMetadata.Add(new ActorEvaluationMetadata(
+                    actor,
+                    referencedTargets,
+                    transformTimesByActorId,
+                    actor.LockOnKeyframes.Select(frame => frame.TimeSeconds).ToFrozenSet(),
+                    Array.AsReadOnly(canonicalTimes.ToArray())));
+            }
+
+            return new TrajectoryEvaluationContext(actorsById, actorMetadata);
+        }
+
+        private static void AddTimesThrough(
+            IEnumerable<double> source,
+            double lastSampleTime,
+            ISet<double> destination)
+        {
+            foreach (var timeSeconds in source)
+            {
+                if (timeSeconds > lastSampleTime)
+                {
+                    break;
+                }
+
+                destination.Add(timeSeconds);
+            }
+        }
+    }
+
+    private sealed record ActorEvaluationMetadata(
+        ActorTrack Actor,
+        IReadOnlyDictionary<string, ActorTrack> ReferencedTargets,
+        IReadOnlyDictionary<string, IReadOnlySet<double>> TransformTimesByActorId,
+        IReadOnlySet<double> LockOnTimes,
+        IReadOnlyList<double> CanonicalTimes);
 
     private sealed class MovementTrajectoryFacingSweep
     {
@@ -221,6 +293,8 @@ internal static class MovementTrajectoryEvaluator
         {
             _actorsById = actorsById;
         }
+
+        public long SegmentSteps { get; private set; }
 
         public EvaluatedActorFacing Advance(
             EvaluatedTransform authored,
@@ -277,11 +351,18 @@ internal static class MovementTrajectoryEvaluator
                 return _snapFacing;
             }
 
-            if (_hasPreviousRelative &&
-                LockOnFacingEvaluator.TryResolveContinuousSegment(
+            var segmentResolved = false;
+            LockOnFacingEvaluator.RelativePosition latestValid = default;
+            if (_hasPreviousRelative)
+            {
+                SegmentSteps++;
+                segmentResolved = LockOnFacingEvaluator.TryResolveContinuousSegment(
                     _previousRelative,
                     currentRelative,
-                    out var latestValid))
+                    out latestValid);
+            }
+
+            if (segmentResolved)
             {
                 _latestValidRelative = latestValid;
                 _hasLatestValidRelative = true;
@@ -339,12 +420,15 @@ internal static class MovementTrajectoryEvaluator
             _keyframes = keyframes;
         }
 
+        public long SegmentSteps { get; private set; }
+
         public EvaluatedTransform Evaluate(double timeSeconds)
         {
             while (_leftIndex + 1 < _keyframes.Count &&
                    _keyframes[_leftIndex + 1].TimeSeconds <= timeSeconds)
             {
                 _leftIndex++;
+                SegmentSteps++;
             }
 
             var left = _keyframes[_leftIndex];
@@ -381,12 +465,15 @@ internal static class MovementTrajectoryEvaluator
             _keyframes = keyframes;
         }
 
+        public long SegmentSteps { get; private set; }
+
         public EvaluatedLockOnState Evaluate(double timeSeconds)
         {
             while (_index + 1 < _keyframes.Count &&
                    _keyframes[_index + 1].TimeSeconds <= timeSeconds)
             {
                 _index++;
+                SegmentSteps++;
             }
 
             if (_index < 0)
