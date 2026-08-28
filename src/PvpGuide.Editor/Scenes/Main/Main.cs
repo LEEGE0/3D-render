@@ -148,7 +148,7 @@ public partial class Main : Control
             _lockOnTrackSurface = lockOnTrackSurface;
             lockOnTrackSurface.Attach(session);
             _projectionController = new SceneProjectionController(
-                session.SnapshotSource,
+                session.ProjectionSource,
                 session.Playback,
                 topViewSurface,
                 worldAdapter);
@@ -1291,6 +1291,21 @@ public partial class Main : Control
         PushViewportLeftButton(surface, markerPosition, pressed: false);
     }
 
+    private static SceneProjectionFrame CreateProbeProjectionFrame(SceneSnapshot snapshot)
+    {
+        const string fingerprint = "runtime-probe/direct-frame";
+        return new SceneProjectionFrame(
+            snapshot,
+            new MovementTrajectorySet(
+                snapshot.DocumentId,
+                snapshot.Revision,
+                snapshot.MotionRevision,
+                fingerprint,
+                new Dictionary<string, ActorMovementTrajectory>(StringComparer.Ordinal),
+                segmentSteps: 0),
+            fingerprint);
+    }
+
     private static void VerifyMidpointTopViewYaw(Control temporaryParent, SceneSnapshot midpointSnapshot)
     {
         const double surfaceWidth = 640;
@@ -1329,7 +1344,7 @@ public partial class Main : Control
         try
         {
             surface.Initialize(session);
-            surface.Apply(midpointSnapshot);
+            surface.Apply(CreateProbeProjectionFrame(midpointSnapshot));
             var midpointCenter = new ScreenPoint(
                 (surfaceWidth / 2) + (3 * pixelsPerUnit),
                 (surfaceHeight / 2) + (-2 * pixelsPerUnit));
@@ -1395,13 +1410,13 @@ public partial class Main : Control
                     ["a-b"] = new EvaluatedTransform(new Position3(1, 0, 0), 90),
                 });
 
-            adapter.Apply(snapshot);
+            adapter.Apply(CreateProbeProjectionFrame(snapshot));
             var firstNames = temporaryRoot.GetChildren()
                 .Select(child => child.Name.ToString())
                 .Where(name => name.StartsWith("Actor_", StringComparison.Ordinal))
                 .OrderBy(name => name, StringComparer.Ordinal)
                 .ToArray();
-            adapter.Apply(snapshot);
+            adapter.Apply(CreateProbeProjectionFrame(snapshot));
             var secondNames = temporaryRoot.GetChildren()
                 .Select(child => child.Name.ToString())
                 .Where(name => name.StartsWith("Actor_", StringComparison.Ordinal))
@@ -1417,11 +1432,11 @@ public partial class Main : Control
                     firstNames.Contains("Actor_a_b__0061_002D_0062", StringComparer.Ordinal),
                 "collision node 이름이 exact base와 결정적 suffix 계약을 지키지 않았습니다.");
 
-            adapter.Apply(new SceneSnapshot(
+            adapter.Apply(CreateProbeProjectionFrame(new SceneSnapshot(
                 "collision-runtime",
                 revision: 1,
                 timeSeconds: 0,
-                new Dictionary<string, EvaluatedTransform>(StringComparer.Ordinal)));
+                new Dictionary<string, EvaluatedTransform>(StringComparer.Ordinal))));
             Require(adapter.ActorCount == 0, "empty snapshot 뒤 adapter actor dictionary가 비워지지 않았습니다.");
             Require(ReferenceEquals(foreignChild.GetParent(), temporaryRoot) && !foreignChild.IsQueuedForDeletion(),
                 "adapter가 소유하지 않은 foreign child를 제거했습니다.");
@@ -1448,7 +1463,7 @@ public partial class Main : Control
         try
         {
             surface.Initialize(session);
-            surface.Apply(document.CreateSnapshot(0));
+            surface.Apply(CreateProbeProjectionFrame(document.CreateSnapshot(0)));
             var mapper = new TopViewCoordinateMapper(400, 400, 0, 0, 40);
             var center = mapper.WorldToScreen(new Position3(0, 0, 0));
             SendLeftButton(surface, center, pressed: true);

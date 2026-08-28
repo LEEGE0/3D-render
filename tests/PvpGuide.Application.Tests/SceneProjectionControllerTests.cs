@@ -1,5 +1,5 @@
-using PvpGuide.Application.Projection;
 using PvpGuide.Application.Playback;
+using PvpGuide.Application.Projection;
 using PvpGuide.Application.Sessions;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Actors;
@@ -11,30 +11,9 @@ namespace PvpGuide.Application.Tests;
 public sealed class SceneProjectionControllerTests
 {
     [Fact]
-    public void Projection_delivers_same_semantic_state_to_both_consumers()
+    public void Projection_delivers_the_exact_same_frame_snapshot_and_trajectories_to_both_consumers()
     {
-        var document = SceneDocument.Create(
-            "semantic-projection",
-            "semantic-projection",
-            null,
-            durationSeconds: 2,
-            framesPerSecond: 30,
-            [
-                new ActorTrack(
-                    "host",
-                    "Host",
-                    "player",
-                    [new TransformKeyframe("host-transform", 0, new Position3(0, 0, 0), 0)],
-                    [new ActionKeyframe("host-action", 1, "attack")],
-                    [new LockOnKeyframe("host-lock", 1, true, "invader")]),
-                new ActorTrack(
-                    "invader",
-                    "Invader",
-                    "enemy",
-                    [new TransformKeyframe("invader-transform", 0, new Position3(4, 0, -1), 180)],
-                    [],
-                    []),
-            ]);
+        var document = CreateSemanticDocument();
         var playback = new PlaybackClock(2, 30);
         var top = new RecordingConsumer();
         var world = new RecordingConsumer();
@@ -42,174 +21,225 @@ public sealed class SceneProjectionControllerTests
 
         Assert.True(playback.Seek(1.5));
 
-        Assert.Same(top.Received.Single(), world.Received.Single());
-        Assert.Equal("attack", top.Received[0].ActorTimelineStates["host"].Action.ActionKey);
-        Assert.Equal("invader", top.Received[0].ActorTimelineStates["host"].LockOn.TargetActorId);
+        var topFrame = Assert.Single(top.Received);
+        var worldFrame = Assert.Single(world.Received);
+        Assert.Same(topFrame, worldFrame);
+        Assert.Same(topFrame.Snapshot, worldFrame.Snapshot);
+        Assert.Same(topFrame.Trajectories, worldFrame.Trajectories);
+        Assert.Equal("attack", topFrame.Snapshot.ActorTimelineStates["host"].Action.ActionKey);
+        Assert.Equal("invader", topFrame.Snapshot.ActorTimelineStates["host"].LockOn.TargetActorId);
     }
 
     [Fact]
-    public void Time_change_projects_same_revision_at_new_time_to_both_consumers()
+    public void Frame_rejects_document_revision_motion_revision_and_policy_mismatches()
     {
-        var document = SceneDocument.Create(
-            "document-1",
-            "document-1",
-            null,
-            durationSeconds: 1,
-            framesPerSecond: 30,
-            [
-                new ActorTrack("actor-1", [
-                    new TransformKeyframe("start", 0, new Position3(0, 0, 0), 350),
-                    new TransformKeyframe("end", 1, new Position3(10, 20, 30), 10),
-                ]),
-            ]);
-        var session = new DocumentSession(document);
-        var top = new RecordingConsumer();
-        var world = new RecordingConsumer();
-        using var controller = new SceneProjectionController(document, session.Playback, top, world);
+        var snapshot = CreateSnapshot("document", revision: 5, motionRevision: 3);
+        var valid = CreateTrajectories("document", revision: 5, motionRevision: 3, "policy-a");
 
-        controller.ProjectCurrent();
-        Assert.True(session.Playback.Seek(0.5));
-
-        Assert.Equal(2, top.Received.Count);
-        Assert.Equal(2, world.Received.Count);
-        Assert.Same(top.Received[1], world.Received[1]);
-        Assert.Equal(0, top.Received[0].Revision);
-        Assert.Equal(0, top.Received[1].Revision);
-        Assert.Equal(0.5, top.Received[1].TimeSeconds);
-        Assert.Equal(new Position3(5, 10, 15), top.Received[1].ActorTransforms["actor-1"].Position);
-        Assert.Equal(0, top.Received[1].ActorTransforms["actor-1"].YawDegrees);
+        Assert.Throws<ArgumentException>(() => new SceneProjectionFrame(
+            snapshot,
+            CreateTrajectories("other", 5, 3, "policy-a"),
+            "policy-a"));
+        Assert.Throws<ArgumentException>(() => new SceneProjectionFrame(
+            snapshot,
+            CreateTrajectories("document", 4, 3, "policy-a"),
+            "policy-a"));
+        Assert.Throws<ArgumentException>(() => new SceneProjectionFrame(
+            snapshot,
+            CreateTrajectories("document", 5, 2, "policy-a"),
+            "policy-a"));
+        Assert.Throws<ArgumentException>(() => new SceneProjectionFrame(snapshot, valid, "policy-b"));
     }
 
     [Fact]
-    public void ProjectCurrent_delivers_one_shared_snapshot_before_any_change_event()
+    public void First_projection_builds_once_and_seek_reuses_the_same_trajectory_instance()
     {
-        var source = new RecordingSnapshotSource(revision: 5);
-        var top = new RecordingConsumer();
-        var world = new RecordingConsumer();
-        using var controller = new SceneProjectionController(source, new PlaybackClock(10, 30), top, world);
-
-        controller.ProjectCurrent();
-        controller.ProjectCurrent();
-
-        Assert.Equal(2, source.CreateSnapshotCalls);
-        Assert.Single(top.Received);
-        Assert.Single(world.Received);
-        Assert.Same(top.Received[0], world.Received[0]);
-    }
-
-    [Fact]
-    public void Change_delivers_one_shared_snapshot_to_each_consumer_once_per_revision()
-    {
-        var source = new RecordingSnapshotSource();
-        var top = new RecordingConsumer();
-        var world = new RecordingConsumer();
-        using var controller = new SceneProjectionController(source, new PlaybackClock(10, 30), top, world);
-
-        source.Publish(7);
-        source.Publish(7);
-        source.Publish(8);
-
-        Assert.Equal(2, source.CreateSnapshotCalls);
-        Assert.Equal([7L, 8L], top.Received.Select(snapshot => snapshot.Revision));
-        Assert.Equal([7L, 8L], world.Received.Select(snapshot => snapshot.Revision));
-        Assert.Same(top.Received[0], world.Received[0]);
-        Assert.Same(top.Received[1], world.Received[1]);
-    }
-
-    [Fact]
-    public void ProjectCurrent_then_same_revision_change_is_deduplicated()
-    {
-        var source = new RecordingSnapshotSource(revision: 7);
-        var top = new RecordingConsumer();
-        var world = new RecordingConsumer();
-        using var controller = new SceneProjectionController(source, new PlaybackClock(10, 30), top, world);
-
-        controller.ProjectCurrent();
-        source.Publish(7);
-        source.Publish(8);
-
-        Assert.Equal([7L, 8L], top.Received.Select(snapshot => snapshot.Revision));
-        Assert.Equal(2, source.CreateSnapshotCalls);
-    }
-
-    [Fact]
-    public void ProjectCurrent_reads_a_new_current_revision_without_a_change_event_and_deduplicates_delivery()
-    {
-        var source = new RecordingSnapshotSource(revision: 5);
-        var top = new RecordingConsumer();
-        var world = new RecordingConsumer();
-        using var controller = new SceneProjectionController(source, new PlaybackClock(10, 30), top, world);
-
-        controller.ProjectCurrent();
-        source.SetRevisionSilently(6);
-        controller.ProjectCurrent();
-        controller.ProjectCurrent();
-
-        Assert.Equal(3, source.CreateSnapshotCalls);
-        Assert.Equal([5L, 6L], top.Received.Select(snapshot => snapshot.Revision));
-        Assert.Equal([5L, 6L], world.Received.Select(snapshot => snapshot.Revision));
-        Assert.Same(top.Received[0], world.Received[0]);
-        Assert.Same(top.Received[1], world.Received[1]);
-    }
-
-    [Fact]
-    public void ProjectCurrent_deduplicates_an_exact_revision_time_key()
-    {
-        var source = new RecordingSnapshotSource(revision: 5);
-        var playback = new PlaybackClock(10, 30);
-        var top = new RecordingConsumer();
-        var world = new RecordingConsumer();
-        using var controller = new SceneProjectionController(source, playback, top, world);
-
-        controller.ProjectCurrent();
-        controller.ProjectCurrent();
-
-        Assert.Equal(2, source.CreateSnapshotCalls);
-        Assert.Single(top.Received);
-        Assert.Single(world.Received);
-        Assert.Same(top.Received[0], world.Received[0]);
-        Assert.Equal(5, top.Received[0].Revision);
-        Assert.Equal(0, top.Received[0].TimeSeconds);
-    }
-
-    [Fact]
-    public void Time_or_revision_change_each_delivers_one_shared_snapshot()
-    {
-        var source = new RecordingSnapshotSource(revision: 5);
-        var playback = new PlaybackClock(10, 30);
+        var source = new ControllableProjectionSource(durationSeconds: 2, framesPerSecond: 30);
+        var playback = new PlaybackClock(2, 30);
         var top = new RecordingConsumer();
         var world = new RecordingConsumer();
         using var controller = new SceneProjectionController(source, playback, top, world);
 
         controller.ProjectCurrent();
         Assert.True(playback.Seek(0.5));
-        source.Publish(6);
 
-        Assert.Equal(3, source.CreateSnapshotCalls);
-        Assert.Equal([(5L, 0d), (5L, 0.5d), (6L, 0.5d)], top.Received.Select(snapshot => (snapshot.Revision, snapshot.TimeSeconds)));
-        Assert.Equal([(5L, 0d), (5L, 0.5d), (6L, 0.5d)], world.Received.Select(snapshot => (snapshot.Revision, snapshot.TimeSeconds)));
-        Assert.Same(top.Received[0], world.Received[0]);
-        Assert.Same(top.Received[1], world.Received[1]);
-        Assert.Same(top.Received[2], world.Received[2]);
+        Assert.Equal(1, source.CreateTrajectoriesCalls);
+        Assert.Equal(2, source.CreateSnapshotCalls);
+        Assert.Same(top.Received[0].Trajectories, top.Received[1].Trajectories);
+        Assert.Equal(1, controller.CachedTrajectoryEntryCount);
     }
 
     [Fact]
-    public void Dispose_stops_document_and_playback_event_projection()
+    public void Controller_requests_lock_on_motion_v1_with_a_30hz_uniform_limit()
     {
-        var source = new RecordingSnapshotSource();
-        var playback = new PlaybackClock(10, 30);
+        var source = new ControllableProjectionSource();
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        controller.ProjectCurrent();
+
+        Assert.Equal("lock-on-motion/v1", source.LastSettings?.PolicyVersion);
+        Assert.Equal(30, source.LastSettings?.MaximumUniformRate);
+    }
+
+    [Fact]
+    public void Action_only_revision_wraps_the_cached_set_and_reuses_actor_geometry()
+    {
+        var source = new ControllableProjectionSource();
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        controller.ProjectCurrent();
+        source.Publish(revision: 1, motionRevision: 0);
+
+        Assert.Equal(1, source.CreateTrajectoriesCalls);
+        Assert.Equal([0L, 1L], top.Received.Select(frame => frame.Snapshot.Revision));
+        Assert.NotSame(top.Received[0].Trajectories, top.Received[1].Trajectories);
+        Assert.Same(top.Received[0].Trajectories.Actors, top.Received[1].Trajectories.Actors);
+        Assert.Equal(1, top.Received[1].Trajectories.Revision);
+    }
+
+    [Fact]
+    public void Motion_revision_change_rebuilds_once_and_replaces_the_single_cache_entry()
+    {
+        var source = new ControllableProjectionSource();
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        controller.ProjectCurrent();
+        source.Publish(revision: 1, motionRevision: 1);
+
+        Assert.Equal(2, source.CreateTrajectoriesCalls);
+        Assert.NotSame(top.Received[0].Trajectories.Actors, top.Received[1].Trajectories.Actors);
+        Assert.Equal(1, controller.CachedTrajectoryEntryCount);
+    }
+
+    [Fact]
+    public void Metadata_change_during_evaluation_retries_without_publishing_a_stale_frame()
+    {
+        var source = new ControllableProjectionSource();
+        source.BeforeNextSnapshot = () => source.SetMetadataSilently(revision: 1, motionRevision: 1);
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        controller.ProjectCurrent();
+
+        var frame = Assert.Single(top.Received);
+        Assert.Same(frame, Assert.Single(world.Received));
+        Assert.Equal(1, frame.Snapshot.Revision);
+        Assert.Equal(1, frame.Snapshot.MotionRevision);
+        Assert.Equal(2, source.CreateSnapshotCalls);
+    }
+
+    [Fact]
+    public void Continuously_changing_metadata_exhausts_the_bounded_retry_without_publishing()
+    {
+        var source = new ControllableProjectionSource { ChangeMetadataBeforeEverySnapshot = true };
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        var error = Assert.Throws<InvalidOperationException>(controller.ProjectCurrent);
+
+        Assert.Contains("stable projection", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(3, source.CreateSnapshotCalls);
+        Assert.Empty(top.Received);
+        Assert.Empty(world.Received);
+    }
+
+    [Fact]
+    public void Reentrant_source_change_is_serialized_after_both_consumers_receive_the_old_frame()
+    {
+        var source = new ControllableProjectionSource();
+        var order = new List<string>();
+        var reentered = false;
+        var top = new RecordingConsumer(frame =>
+        {
+            order.Add($"top {frame.Snapshot.Revision}");
+            if (!reentered)
+            {
+                reentered = true;
+                source.Publish(revision: 1, motionRevision: 0);
+            }
+        });
+        var world = new RecordingConsumer(frame => order.Add($"world {frame.Snapshot.Revision}"));
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        controller.ProjectCurrent();
+
+        Assert.Equal(["top 0", "world 0", "top 1", "world 1"], order);
+        Assert.Same(top.Received[0], world.Received[0]);
+        Assert.Same(top.Received[1], world.Received[1]);
+    }
+
+    [Fact]
+    public void Exact_revision_and_time_duplicates_are_suppressed_before_snapshot_evaluation()
+    {
+        var source = new ControllableProjectionSource(revision: 5, motionRevision: 3);
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        controller.ProjectCurrent();
+        controller.ProjectCurrent();
+        source.Publish(revision: 5, motionRevision: 3);
+
+        Assert.Equal(1, source.CreateSnapshotCalls);
+        Assert.Single(top.Received);
+        Assert.Single(world.Received);
+    }
+
+    [Fact]
+    public void Consumer_exception_is_preserved_and_projection_state_is_reusable()
+    {
+        var source = new ControllableProjectionSource();
+        var expected = new ProjectionConsumerException("top failed");
+        var top = new ThrowOnceConsumer(expected);
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        var actual = Assert.Throws<ProjectionConsumerException>(controller.ProjectCurrent);
+        controller.ProjectCurrent();
+
+        Assert.Same(expected, actual);
+        Assert.Single(top.Received);
+        Assert.Single(world.Received);
+        Assert.Same(top.Received[0], world.Received[0]);
+    }
+
+    [Fact]
+    public void Dispose_unsubscribes_events_ignores_projection_and_clears_the_cache()
+    {
+        var source = new ControllableProjectionSource();
+        var playback = new PlaybackClock(2, 30);
         var top = new RecordingConsumer();
         var world = new RecordingConsumer();
         var controller = new SceneProjectionController(source, playback, top, world);
+        controller.ProjectCurrent();
 
         controller.Dispose();
         controller.ProjectCurrent();
-        source.Publish(1);
+        source.Publish(revision: 1, motionRevision: 1);
         Assert.True(playback.Seek(0.5));
 
-        Assert.Equal(0, source.CreateSnapshotCalls);
-        Assert.Empty(top.Received);
-        Assert.Empty(world.Received);
+        Assert.Equal(1, source.CreateSnapshotCalls);
+        Assert.Single(top.Received);
+        Assert.Single(world.Received);
+        Assert.Equal(0, controller.CachedTrajectoryEntryCount);
+    }
+
+    [Fact]
+    public void Session_preserves_snapshot_source_and_exposes_the_same_projection_source()
+    {
+        var document = new SceneDocument("document", 2, 30);
+        var session = new DocumentSession(document);
+
+        Assert.Same(document, session.SnapshotSource);
+        Assert.Same(document, session.ProjectionSource);
     }
 
     [Fact]
@@ -218,69 +248,185 @@ public sealed class SceneProjectionControllerTests
         var consumer = new RecordingConsumer();
 
         Assert.Throws<ArgumentException>(() => new SceneProjectionController(
-            new RecordingSnapshotSource(),
-            new PlaybackClock(10, 30),
+            new ControllableProjectionSource(),
+            new PlaybackClock(2, 30),
             consumer,
             consumer));
     }
 
     [Fact]
-    public void Real_document_rejects_empty_actor_without_projection_and_delivers_valid_actor_once_to_each_view()
+    public void Real_document_change_projects_valid_actor_once_to_each_view()
     {
-        var document = new SceneDocument("document-1", 10, 30);
+        var document = new SceneDocument("document", 2, 30);
         var top = new RecordingConsumer();
         var world = new RecordingConsumer();
-        var notifications = 0;
-        document.Changed += (_, _) => notifications++;
-        using var controller = new SceneProjectionController(document, new PlaybackClock(10, 30), top, world);
+        using var controller = new SceneProjectionController(document, new PlaybackClock(2, 30), top, world);
 
-        Assert.Throws<ArgumentException>(() => document.AddActor(new ActorTrack("empty", [])));
-
-        Assert.Equal(0, document.Revision);
-        Assert.Equal(0, notifications);
-        Assert.Empty(document.Actors);
-        Assert.Empty(top.Received);
-        Assert.Empty(world.Received);
-
-        document.AddActor(new ActorTrack("actor-1", [
+        document.AddActor(new ActorTrack("actor", [
             new TransformKeyframe("origin", 0, new Position3(1, 2, 3), 0),
         ]));
 
-        Assert.Equal(1, document.Revision);
-        Assert.Equal(1, notifications);
-        Assert.Single(top.Received);
-        Assert.Single(world.Received);
-        Assert.Same(top.Received[0], world.Received[0]);
-        Assert.Equal(new Position3(1, 2, 3), top.Received[0].ActorTransforms["actor-1"].Position);
+        var frame = Assert.Single(top.Received);
+        Assert.Same(frame, Assert.Single(world.Received));
+        Assert.Equal(new Position3(1, 2, 3), frame.Snapshot.ActorTransforms["actor"].Position);
     }
 
-    private sealed class RecordingSnapshotSource(long revision = 0) : ISceneSnapshotSource
+    private static SceneDocument CreateSemanticDocument() => SceneDocument.Create(
+        "semantic-projection",
+        "semantic-projection",
+        null,
+        durationSeconds: 2,
+        framesPerSecond: 30,
+        [
+            new ActorTrack(
+                "host",
+                "Host",
+                "player",
+                [new TransformKeyframe("host-transform", 0, new Position3(0, 0, 0), 0)],
+                [new ActionKeyframe("host-action", 1, "attack")],
+                [new LockOnKeyframe("host-lock", 1, true, "invader")]),
+            new ActorTrack(
+                "invader",
+                "Invader",
+                "enemy",
+                [new TransformKeyframe("invader-transform", 0, new Position3(4, 0, -1), 180)],
+                [],
+                []),
+        ]);
+
+    private static SceneSnapshot CreateSnapshot(string documentId, long revision, long motionRevision) =>
+        new(
+            documentId,
+            revision,
+            timeSeconds: 0,
+            new Dictionary<string, EvaluatedTransform>(),
+            new Dictionary<string, EvaluatedActorTimelineState>(),
+            new Dictionary<string, EvaluatedActorFacing>(),
+            motionRevision);
+
+    private static MovementTrajectorySet CreateTrajectories(
+        string documentId,
+        long revision,
+        long motionRevision,
+        string fingerprint) =>
+        new(
+            documentId,
+            revision,
+            motionRevision,
+            fingerprint,
+            new Dictionary<string, ActorMovementTrajectory>(),
+            segmentSteps: 0);
+
+    private sealed class ControllableProjectionSource : ISceneProjectionSource
     {
-        private long _currentRevision = revision;
+        private long _revision;
+        private long _motionRevision;
+
+        public ControllableProjectionSource(
+            long revision = 0,
+            long motionRevision = 0,
+            double durationSeconds = 2,
+            int framesPerSecond = 30)
+        {
+            _revision = revision;
+            _motionRevision = motionRevision;
+            DurationSeconds = durationSeconds;
+            FramesPerSecond = framesPerSecond;
+        }
 
         public event EventHandler<SceneDocumentChangedEventArgs>? Changed;
 
+        public double DurationSeconds { get; }
+
+        public int FramesPerSecond { get; }
+
         public int CreateSnapshotCalls { get; private set; }
+
+        public int CreateTrajectoriesCalls { get; private set; }
+
+        public TrajectorySamplingSettings? LastSettings { get; private set; }
+
+        public Action? BeforeNextSnapshot { get; set; }
+
+        public bool ChangeMetadataBeforeEverySnapshot { get; init; }
+
+        public ProjectionSourceMetadata GetProjectionMetadata() =>
+            new("source", DurationSeconds, FramesPerSecond, _revision, _motionRevision);
 
         public SceneSnapshot CreateSnapshot(double timeSeconds)
         {
             CreateSnapshotCalls++;
-            return new SceneSnapshot("source", _currentRevision, timeSeconds, new Dictionary<string, EvaluatedTransform>());
+            if (ChangeMetadataBeforeEverySnapshot)
+            {
+                _revision++;
+                _motionRevision++;
+            }
+
+            var callback = BeforeNextSnapshot;
+            BeforeNextSnapshot = null;
+            callback?.Invoke();
+            return new SceneSnapshot(
+                "source",
+                _revision,
+                timeSeconds,
+                new Dictionary<string, EvaluatedTransform>(),
+                new Dictionary<string, EvaluatedActorTimelineState>(),
+                new Dictionary<string, EvaluatedActorFacing>(),
+                _motionRevision);
         }
 
-        public void Publish(long revision)
+        public TrajectorySamplePlan CreateTrajectorySamplePlan(TrajectorySamplingSettings settings)
         {
-            _currentRevision = revision;
+            LastSettings = settings;
+            var rate = Math.Min(FramesPerSecond, settings.MaximumUniformRate);
+            return new TrajectorySamplePlan(settings.PolicyVersion, rate, [0, DurationSeconds]);
+        }
+
+        public MovementTrajectorySet CreateMovementTrajectories(TrajectorySamplePlan plan)
+        {
+            CreateTrajectoriesCalls++;
+            return CreateTrajectories("source", _revision, _motionRevision, plan.Fingerprint);
+        }
+
+        public void Publish(long revision, long motionRevision)
+        {
+            SetMetadataSilently(revision, motionRevision);
             Changed?.Invoke(this, new SceneDocumentChangedEventArgs(revision));
         }
 
-        public void SetRevisionSilently(long revision) => _currentRevision = revision;
+        public void SetMetadataSilently(long revision, long motionRevision)
+        {
+            _revision = revision;
+            _motionRevision = motionRevision;
+        }
     }
 
-    private sealed class RecordingConsumer : ISceneProjectionConsumer
+    private class RecordingConsumer(Action<SceneProjectionFrame>? onApply = null) : ISceneProjectionConsumer
     {
-        public List<SceneSnapshot> Received { get; } = [];
+        public List<SceneProjectionFrame> Received { get; } = [];
 
-        public void Apply(SceneSnapshot snapshot) => Received.Add(snapshot);
+        public virtual void Apply(SceneProjectionFrame frame)
+        {
+            Received.Add(frame);
+            onApply?.Invoke(frame);
+        }
     }
+
+    private sealed class ThrowOnceConsumer(Exception exception) : RecordingConsumer
+    {
+        private bool _hasThrown;
+
+        public override void Apply(SceneProjectionFrame frame)
+        {
+            if (!_hasThrown)
+            {
+                _hasThrown = true;
+                throw exception;
+            }
+
+            base.Apply(frame);
+        }
+    }
+
+    private sealed class ProjectionConsumerException(string message) : Exception(message);
 }

@@ -76,9 +76,10 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         QueueRedraw();
     }
 
-    public void Apply(SceneSnapshot snapshot)
+    public void Apply(SceneProjectionFrame frame)
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(frame);
+        var snapshot = frame.Snapshot;
         var overlays = SemanticOverlayLayout.CreateScene(snapshot, CreateDisplayedPositions(_preview));
         _latestSnapshot = snapshot;
         DisplayedSemanticOverlays = overlays;

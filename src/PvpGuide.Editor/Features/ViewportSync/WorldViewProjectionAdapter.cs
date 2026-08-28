@@ -27,9 +27,10 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
 
     public int ActorCount => _actorNodes.Count;
 
-    public void Apply(SceneSnapshot snapshot)
+    public void Apply(SceneProjectionFrame frame)
     {
-        ArgumentNullException.ThrowIfNull(snapshot);
+        ArgumentNullException.ThrowIfNull(frame);
+        var snapshot = frame.Snapshot;
         var overlays = CreateSemanticOverlays(snapshot, _preview);
         _latestSnapshot = snapshot;
         ApplyCount++;

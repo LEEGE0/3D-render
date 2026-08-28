@@ -49,6 +49,8 @@ public sealed class DocumentSession
 
     public ISceneSnapshotSource SnapshotSource => _document;
 
+    public ISceneProjectionSource ProjectionSource => _document;
+
     public string? SelectedActorId { get; private set; }
 
     public string? SelectedTransformKeyframeId { get; private set; }

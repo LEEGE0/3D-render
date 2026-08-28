@@ -11,7 +11,7 @@ public interface ISceneSnapshotSource
     SceneSnapshot CreateSnapshot(double timeSeconds);
 }
 
-public sealed class SceneDocument : ISceneSnapshotSource
+public sealed class SceneDocument : ISceneProjectionSource
 {
     private readonly Dictionary<string, ActorTrack> _actorsById = new(StringComparer.Ordinal);
     private readonly List<ActorTrack> _actors = [];
@@ -73,6 +73,9 @@ public sealed class SceneDocument : ISceneSnapshotSource
     public IReadOnlyList<ActorTrack> Actors => _readOnlyActors;
 
     public event EventHandler<SceneDocumentChangedEventArgs>? Changed;
+
+    public ProjectionSourceMetadata GetProjectionMetadata() =>
+        new(DocumentId, DurationSeconds, FramesPerSecond, Revision, MotionRevision);
 
     public static SceneDocument Create(
         string documentId,
