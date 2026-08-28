@@ -575,6 +575,14 @@ internal static class ActionLockOnRuntimeProbe
                 expectedYawDegrees: 15,
                 FacingResolutionKind.SnapTarget,
                 "Snap hold");
+            var shaderBoundaryNodes = GetTrajectoryNodes(probeWorldRoot, probeActorId);
+            var shaderBoundarySharedMesh = shaderBoundaryNodes.SharedPath.Mesh;
+            var shaderBoundaryFreeMesh = shaderBoundaryNodes.FreeTicks.Mesh;
+            var shaderBoundaryLockMesh = shaderBoundaryNodes.LockTicks.Mesh;
+            RequireTrajectoryShaderBoundary(
+                shaderBoundaryNodes,
+                expectedCurrentTimeNormalized: 0.125,
+                "0.5초 shader boundary");
 
             SeekWithSlider(timeSlider, 1.5);
             RequireFacingProjection(
@@ -586,6 +594,14 @@ internal static class ActionLockOnRuntimeProbe
                 FacingResolutionKind.ContinuousTarget,
                 "Continuous tracking");
             RequireTopViewTrajectoryPresentation(topView, topConsumer.LastFrame!, probeActorId, 1.5);
+            RequireTrajectoryShaderBoundary(
+                shaderBoundaryNodes,
+                expectedCurrentTimeNormalized: 0.375,
+                "1.5초 shader boundary");
+            Require(ReferenceEquals(shaderBoundarySharedMesh, shaderBoundaryNodes.SharedPath.Mesh) &&
+                    ReferenceEquals(shaderBoundaryFreeMesh, shaderBoundaryNodes.FreeTicks.Mesh) &&
+                    ReferenceEquals(shaderBoundaryLockMesh, shaderBoundaryNodes.LockTicks.Mesh),
+                "0.5→1.5초 seek가 실제 trajectory mesh identity를 변경했습니다.");
 
             SeekWithSlider(timeSlider, 2.5);
             RequireFacingProjection(
@@ -596,6 +612,14 @@ internal static class ActionLockOnRuntimeProbe
                 expectedYawDegrees: 85,
                 FacingResolutionKind.AuthoredKeyframeOnly,
                 "KeyframeOnly authored yaw");
+            RequireTrajectoryShaderBoundary(
+                shaderBoundaryNodes,
+                expectedCurrentTimeNormalized: 0.625,
+                "2.5초 shader boundary");
+            Require(ReferenceEquals(shaderBoundarySharedMesh, shaderBoundaryNodes.SharedPath.Mesh) &&
+                    ReferenceEquals(shaderBoundaryFreeMesh, shaderBoundaryNodes.FreeTicks.Mesh) &&
+                    ReferenceEquals(shaderBoundaryLockMesh, shaderBoundaryNodes.LockTicks.Mesh),
+                "0.5→2.5초 seek가 실제 trajectory mesh identity를 변경했습니다.");
 
             SeekWithSlider(timeSlider, 3.5);
             var coincidentFacing = topConsumer.LastFrame!.Snapshot.ActorFacings[probeActorId];
@@ -687,6 +711,13 @@ internal static class ActionLockOnRuntimeProbe
                     frameAfterMotion.Snapshot.MotionRevision == document.MotionRevision &&
                     !ReferenceEquals(frameBeforeMotion.Trajectories.Actors, frameAfterMotion.Trajectories.Actors),
                 "motion mutation이 새 revision/motion revision frame과 새 geometry payload를 전달하지 않았습니다.");
+
+            RequireWorldRemovalOwnership(
+                worldView,
+                probeWorldRoot,
+                frameAfterMotion,
+                removedActorId: probeActorId,
+                retainedActorId: probeTargetId);
 
             RequireMissingTargetBadge(probeUiRoot, probeWorldRoot);
             RequireZeroDurationProjection(probeUiRoot, probeWorldRoot);
@@ -869,6 +900,40 @@ internal static class ActionLockOnRuntimeProbe
         return vertices.ToArray();
     }
 
+    private static void RequireTrajectoryShaderBoundary(
+        TrajectoryNodes nodes,
+        double expectedCurrentTimeNormalized,
+        string stage)
+    {
+        foreach (var meshInstance in new[] { nodes.SharedPath, nodes.FreeTicks, nodes.LockTicks })
+        {
+            var actualUniform = ReadCurrentTimeUniform(meshInstance);
+            var normalizedTimes = ReadNormalizedMeshTimes(meshInstance);
+            Require(actualUniform == expectedCurrentTimeNormalized,
+                $"{stage}: {meshInstance.Name}의 current_time_normalized가 " +
+                $"{expectedCurrentTimeNormalized}이 아닙니다. actual={actualUniform}");
+            Require(normalizedTimes.Any(time => time <= expectedCurrentTimeNormalized) &&
+                    normalizedTimes.Any(time => time > expectedCurrentTimeNormalized),
+                $"{stage}: {meshInstance.Name} 실제 UV.x에 현재/과거와 미래가 모두 없습니다.");
+        }
+    }
+
+    private static double[] ReadNormalizedMeshTimes(MeshInstance3D instance)
+    {
+        var mesh = instance.Mesh
+            ?? throw new InvalidOperationException($"{instance.Name}의 mesh resource가 없습니다.");
+        var normalizedTimes = new List<double>();
+        for (var surfaceIndex = 0; surfaceIndex < mesh.GetSurfaceCount(); surfaceIndex++)
+        {
+            var arrays = mesh.SurfaceGetArrays(surfaceIndex);
+            normalizedTimes.AddRange(
+                arrays[(int)Mesh.ArrayType.TexUV].AsVector2Array().Select(uv => (double)uv.X));
+        }
+
+        Require(normalizedTimes.Count > 0, $"{instance.Name}의 실제 mesh UV가 비어 있습니다.");
+        return normalizedTimes.ToArray();
+    }
+
     private static void RequireVectorSequence(
         IReadOnlyList<Vector3> expected,
         IReadOnlyList<Vector3> actual,
@@ -891,6 +956,94 @@ internal static class ActionLockOnRuntimeProbe
         }
 
         return count;
+    }
+
+    private static void RequireWorldRemovalOwnership(
+        WorldViewProjectionAdapter worldView,
+        Node3D worldRoot,
+        SceneProjectionFrame fullFrame,
+        string removedActorId,
+        string retainedActorId)
+    {
+        Require(worldView.ActorCount == 2 && worldView.TrajectoryActorCount == 2,
+            "actor removal 전 WorldView actor/trajectory 수가 2/2가 아닙니다.");
+
+        var overlayRoot = worldRoot.GetNodeOrNull<Node3D>("TrajectoryOverlayRoot")
+            ?? throw new InvalidOperationException("actor removal probe의 TrajectoryOverlayRoot가 없습니다.");
+        var removedActorRoot = worldRoot.GetNodeOrNull<Node3D>("Actor_probe_host")
+            ?? throw new InvalidOperationException("제거할 실제 actor root가 없습니다.");
+        var retainedActorRoot = worldRoot.GetNodeOrNull<Node3D>("Actor_probe_target")
+            ?? throw new InvalidOperationException("보존할 실제 actor root가 없습니다.");
+        var removedTrajectoryRoot = overlayRoot.GetNodeOrNull<Node3D>("Trajectory_probe_host")
+            ?? throw new InvalidOperationException("제거할 실제 trajectory container가 없습니다.");
+        var retainedTrajectoryRoot = overlayRoot.GetNodeOrNull<Node3D>("Trajectory_probe_target")
+            ?? throw new InvalidOperationException("보존할 실제 trajectory container가 없습니다.");
+        var foreignChild = new Node3D { Name = "ForeignTrajectoryChild" };
+        overlayRoot.AddChild(foreignChild);
+        var applyCountBeforeRemoval = worldView.ApplyCount;
+
+        var reducedFrame = CreateRetainedActorFrame(fullFrame, retainedActorId);
+        worldView.Apply(reducedFrame);
+
+        Require(worldView.ApplyCount == applyCountBeforeRemoval + 1 &&
+                worldView.ActorCount == 1 && worldView.TrajectoryActorCount == 1,
+            "actor removal frame이 WorldView actor/trajectory 수를 함께 1/1로 줄이지 않았습니다.");
+        Require(removedActorRoot.IsQueuedForDeletion() && removedTrajectoryRoot.IsQueuedForDeletion(),
+            "제거 대상 actor/trajectory 소유 node가 QueueFree 대기 상태가 아닙니다.");
+        Require(!retainedActorRoot.IsQueuedForDeletion() &&
+                !retainedTrajectoryRoot.IsQueuedForDeletion() &&
+                ReferenceEquals(retainedActorRoot.GetParent(), worldRoot) &&
+                ReferenceEquals(retainedTrajectoryRoot.GetParent(), overlayRoot),
+            "유지 대상 actor/trajectory node가 제거되거나 parent가 변경됐습니다.");
+        Require(!foreignChild.IsQueuedForDeletion() && ReferenceEquals(foreignChild.GetParent(), overlayRoot),
+            "adapter가 소유하지 않은 trajectory overlay child를 제거했습니다.");
+        Require(reducedFrame.Snapshot.ActorTransforms.Keys.SequenceEqual([retainedActorId]) &&
+                reducedFrame.Trajectories.Actors.Keys.SequenceEqual([retainedActorId]) &&
+                removedActorId != retainedActorId,
+            "actor removal synthetic frame이 유지 actor 하나만 포함하지 않습니다.");
+    }
+
+    private static SceneProjectionFrame CreateRetainedActorFrame(
+        SceneProjectionFrame fullFrame,
+        string retainedActorId)
+    {
+        var nextRevision = fullFrame.Snapshot.Revision + 1;
+        var nextMotionRevision = fullFrame.Snapshot.MotionRevision + 1;
+        var retainedTrajectory = fullFrame.Trajectories.Actors[retainedActorId];
+        var snapshot = new SceneSnapshot(
+            fullFrame.Snapshot.DocumentId,
+            nextRevision,
+            fullFrame.Snapshot.TimeSeconds,
+            new Dictionary<string, EvaluatedTransform>(StringComparer.Ordinal)
+            {
+                [retainedActorId] = fullFrame.Snapshot.ActorTransforms[retainedActorId],
+            },
+            new Dictionary<string, EvaluatedActorTimelineState>(StringComparer.Ordinal)
+            {
+                [retainedActorId] = fullFrame.Snapshot.ActorTimelineStates[retainedActorId],
+            },
+            new Dictionary<string, EvaluatedActorFacing>(StringComparer.Ordinal)
+            {
+                [retainedActorId] = fullFrame.Snapshot.ActorFacings[retainedActorId],
+            },
+            nextMotionRevision);
+        var uniformRate = fullFrame.Trajectories.UniformRate
+            ?? throw new InvalidOperationException("actor removal fixture에 uniform rate가 없습니다.");
+        var trajectories = new MovementTrajectorySet(
+            fullFrame.Trajectories.DocumentId,
+            nextRevision,
+            nextMotionRevision,
+            fullFrame.Trajectories.SamplingPolicyFingerprint,
+            uniformRate,
+            new Dictionary<string, ActorMovementTrajectory>(StringComparer.Ordinal)
+            {
+                [retainedActorId] = retainedTrajectory,
+            },
+            retainedTrajectory.SegmentSteps);
+        return new SceneProjectionFrame(
+            snapshot,
+            trajectories,
+            fullFrame.SamplingPolicyFingerprint);
     }
 
     private static void RequireMissingTargetBadge(Control uiParent, Node3D worldParent)

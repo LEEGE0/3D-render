@@ -131,3 +131,5 @@ TRAJECTORY_PERFORMANCE_GATE=PASS build_p95_ms=1.874100 limit_ms=8.00
 이 수치는 현재 장비에서 한 번 fresh 실행한 진단값이며 다른 장비의 절대 성능을 보장하지 않는다. 4×100의 8ms gate만 현재 완료 기준으로 사용하고, 16×1,000은 wall-clock으로 xUnit을 실패시키지 않고 수치와 선형 operation count만 기록한다.
 
 대규모 16 actors/1,000 keys 지원을 완료로 선언하기 전에는 영향 actor와 변경 시간 구간만 무효화하는 증분 trajectory cache를 구현해야 한다. 현재 full motion-revision rebuild 예외를 장기 구조로 간주하지 않는다.
+
+위치 일치 fallback의 현재 point 평가도 대규모 지원 전 최적화 대상이다. 같은 위치가 오래 지속되면 `LockOnFacingEvaluator`가 이전 유효 방향을 찾는 과정에서 정렬 구간마다 `ActorTrack.Evaluate`의 선형 탐색을 반복해 최악 O(K²)가 될 수 있다. 현재 승인 범위인 100-key fixture의 read-only 진단은 약 0.8ms로 기존 2ms snapshot 예산 안이지만, 1,000-key 지원 전에는 forward cursor/merge 기반 과거 방향 탐색으로 바꾸고 위치 일치 전용 성능 회귀를 추가해야 한다.

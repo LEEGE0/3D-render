@@ -126,6 +126,7 @@ selection, playback time, preview와 history stack은 저장되는 `SceneDocumen
 ### 다음 구현 단위 — 증분 trajectory cache와 후속 UX 경계
 
 - 현재 motion 변경의 전체 trajectory rebuild를 actor별·변경 구간별 증분 cache로 세분화한다.
+- 위치 일치가 오래 지속될 때 이전 유효 방향을 찾는 point 평가의 최악 O(K²) 탐색을 forward cursor/merge 방식으로 바꾸고 100/1,000-key 전용 회귀를 고정한다. 현재 100-key read-only 진단 약 0.8ms는 2ms snapshot 예산 안이지만 1,000-key 지원 근거로 사용하지 않는다.
 - 대규모 actor/key 규모를 완료 범위로 올리기 전에 deterministic operation-count와 대표/대규모 production p95를 다시 고정한다.
 - timeline 확대·스크롤·프레임/키프레임/구간 스냅은 우선순위 검토만 완료했으며 단계 3D와 분리한 후속 UX 작업으로 진행한다.
 - marker drag/복제도 기존 command/stale-preimage/Undo·Redo 계약을 유지하는 별도 작업으로 설계한다.
