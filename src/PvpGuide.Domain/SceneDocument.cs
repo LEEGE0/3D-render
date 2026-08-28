@@ -16,6 +16,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
     private readonly Dictionary<string, ActorTrack> _actorsById = new(StringComparer.Ordinal);
     private readonly List<ActorTrack> _actors = [];
     private readonly ReadOnlyCollection<ActorTrack> _readOnlyActors;
+    private long _motionRevision;
 
     public SceneDocument(string documentId, double durationSeconds, int framesPerSecond)
         : this(documentId, documentId, null, durationSeconds, framesPerSecond, null)
@@ -66,6 +67,8 @@ public sealed class SceneDocument : ISceneSnapshotSource
     public ImportMetadata? ImportMetadata { get; }
 
     public long Revision { get; private set; }
+
+    public long MotionRevision => _motionRevision;
 
     public IReadOnlyList<ActorTrack> Actors => _readOnlyActors;
 
@@ -123,7 +126,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
 
         _actorsById.Add(actor.ActorId, actor);
         _actors.Add(actor);
-        RaiseChanged();
+        RaiseChanged(affectsMotion: true);
     }
 
     public void AddKeyframe(string actorId, TransformKeyframe keyframe)
@@ -145,7 +148,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
             actor.LockOnKeyframes);
         _actorsById[actorId] = updatedActor;
         _actors[_actors.IndexOf(actor)] = updatedActor;
-        RaiseChanged();
+        RaiseChanged(affectsMotion: true);
     }
 
     public TransformKeyframe GetTransformKeyframe(string actorId, string keyframeId)
@@ -161,7 +164,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
 
         var actor = GetRequiredActor(actorId);
         ReplaceActor(actor, actor.AddActionKeyframe(keyframe));
-        RaiseChanged();
+        RaiseChanged(affectsMotion: false);
     }
 
     public ActionKeyframe GetActionKeyframe(string actorId, string keyframeId)
@@ -188,7 +191,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
         }
 
         ReplaceActor(actor, actor.UpdateActionKeyframe(expectedCurrent, replacement));
-        RaiseChanged();
+        RaiseChanged(affectsMotion: false);
         return true;
     }
 
@@ -198,7 +201,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
 
         var actor = GetRequiredActor(actorId);
         ReplaceActor(actor, actor.RemoveActionKeyframe(expectedCurrent));
-        RaiseChanged();
+        RaiseChanged(affectsMotion: false);
     }
 
     public void AddLockOnKeyframe(string actorId, LockOnKeyframe keyframe)
@@ -209,7 +212,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
         var actor = GetRequiredActor(actorId);
         ValidateLockOnTarget(actor.ActorId, keyframe.TargetActorId, nameof(keyframe));
         ReplaceActor(actor, actor.AddLockOnKeyframe(keyframe));
-        RaiseChanged();
+        RaiseChanged(affectsMotion: true);
     }
 
     public LockOnKeyframe GetLockOnKeyframe(string actorId, string keyframeId)
@@ -237,7 +240,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
         }
 
         ReplaceActor(actor, actor.UpdateLockOnKeyframe(expectedCurrent, replacement));
-        RaiseChanged();
+        RaiseChanged(affectsMotion: true);
         return true;
     }
 
@@ -247,7 +250,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
 
         var actor = GetRequiredActor(actorId);
         ReplaceActor(actor, actor.RemoveLockOnKeyframe(expectedCurrent));
-        RaiseChanged();
+        RaiseChanged(affectsMotion: true);
     }
 
     public bool ReplaceTransformKeyframe(
@@ -285,7 +288,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
         var updated = actor.UpdateTransformKeyframe(expectedCurrent, replacement);
         _actorsById[actorId] = updated;
         _actors[_actors.IndexOf(actor)] = updated;
-        RaiseChanged();
+        RaiseChanged(affectsMotion: true);
         return true;
     }
 
@@ -297,7 +300,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
         var updated = actor.RemoveTransformKeyframe(expectedCurrent);
         _actorsById[actorId] = updated;
         _actors[_actors.IndexOf(actor)] = updated;
-        RaiseChanged();
+        RaiseChanged(affectsMotion: true);
     }
 
     public SceneSnapshot CreateSnapshot(double timeSeconds)
@@ -306,6 +309,7 @@ public sealed class SceneDocument : ISceneSnapshotSource
 
         var evaluatedTransforms = new Dictionary<string, EvaluatedTransform>(_actors.Count, StringComparer.Ordinal);
         var evaluatedTimelineStates = new Dictionary<string, EvaluatedActorTimelineState>(_actors.Count, StringComparer.Ordinal);
+        var evaluatedFacings = new Dictionary<string, EvaluatedActorFacing>(_actors.Count, StringComparer.Ordinal);
         foreach (var actor in _actors)
         {
             evaluatedTransforms.Add(actor.ActorId, actor.Evaluate(timeSeconds));
@@ -314,7 +318,19 @@ public sealed class SceneDocument : ISceneSnapshotSource
                 actor.EvaluateLockOn(timeSeconds)));
         }
 
-        return new SceneSnapshot(DocumentId, Revision, timeSeconds, evaluatedTransforms, evaluatedTimelineStates);
+        foreach (var actor in _actors)
+        {
+            evaluatedFacings.Add(actor.ActorId, LockOnFacingEvaluator.Evaluate(actor, _actorsById, timeSeconds));
+        }
+
+        return new SceneSnapshot(
+            DocumentId,
+            Revision,
+            timeSeconds,
+            evaluatedTransforms,
+            evaluatedTimelineStates,
+            evaluatedFacings,
+            MotionRevision);
     }
 
     private void EnsureTimeWithinDocument(double timeSeconds, string parameterName)
@@ -420,9 +436,14 @@ public sealed class SceneDocument : ISceneSnapshotSource
         }
     }
 
-    private void RaiseChanged()
+    private void RaiseChanged(bool affectsMotion)
     {
         Revision++;
+        if (affectsMotion)
+        {
+            _motionRevision++;
+        }
+
         Changed?.Invoke(this, new SceneDocumentChangedEventArgs(Revision));
     }
 }

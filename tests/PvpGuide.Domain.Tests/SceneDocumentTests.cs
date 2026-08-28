@@ -177,6 +177,92 @@ public sealed class SceneDocumentTests
     }
 
     [Fact]
+    public void SceneDocument_snapshot_exposes_resolved_facings_for_every_actor_without_replacing_authored_yaw()
+    {
+        var document = CreateSemanticDocument();
+
+        var snapshot = document.CreateSnapshot(1);
+
+        Assert.Equal(["host", "invader"], snapshot.ActorFacings.Keys.OrderBy(actorId => actorId));
+        Assert.Equal(0, snapshot.ActorTransforms["host"].YawDegrees);
+        Assert.Equal(15, snapshot.ActorFacings["host"].YawDegrees);
+        Assert.Equal(FacingResolutionKind.ContinuousTarget, snapshot.ActorFacings["host"].ResolutionKind);
+        Assert.Equal(180, snapshot.ActorTransforms["invader"].YawDegrees);
+        Assert.Equal(180, snapshot.ActorFacings["invader"].YawDegrees);
+        Assert.Equal(FacingResolutionKind.AuthoredDisabled, snapshot.ActorFacings["invader"].ResolutionKind);
+    }
+
+    [Fact]
+    public void SceneSnapshot_facing_map_defensively_copies_rejects_unknown_actors_and_fills_authored_fallbacks()
+    {
+        var transforms = new Dictionary<string, EvaluatedTransform>
+        {
+            ["host"] = new EvaluatedTransform(new Position3(1, 2, 3), 270),
+        };
+        var states = new Dictionary<string, EvaluatedActorTimelineState>();
+        var facings = new Dictionary<string, EvaluatedActorFacing>
+        {
+            ["host"] = new EvaluatedActorFacing(90, FacingResolutionKind.ContinuousTarget, "lock-1"),
+        };
+
+        var snapshot = new SceneSnapshot("snapshot", 4, 1, transforms, states, facings, 2);
+        facings["host"] = new EvaluatedActorFacing(180, FacingResolutionKind.AuthoredDisabled, null);
+        facings.Clear();
+
+        Assert.Equal(90, snapshot.ActorFacings["host"].YawDegrees);
+        Assert.Throws<NotSupportedException>(() =>
+            ((IDictionary<string, EvaluatedActorFacing>)snapshot.ActorFacings).Add(
+                "intruder",
+                new EvaluatedActorFacing(0, FacingResolutionKind.AuthoredDisabled, null)));
+
+        var fallback = new SceneSnapshot(
+            "snapshot",
+            4,
+            1,
+            transforms,
+            states,
+            new Dictionary<string, EvaluatedActorFacing>(),
+            2);
+        Assert.Equal(270, fallback.ActorFacings["host"].YawDegrees);
+        Assert.Equal(FacingResolutionKind.AuthoredDisabled, fallback.ActorFacings["host"].ResolutionKind);
+
+        Assert.Throws<ArgumentException>(() => new SceneSnapshot(
+            "snapshot",
+            4,
+            1,
+            transforms,
+            states,
+            new Dictionary<string, EvaluatedActorFacing>
+            {
+                ["unknown"] = new EvaluatedActorFacing(0, FacingResolutionKind.AuthoredDisabled, null),
+            },
+            2));
+    }
+
+    [Fact]
+    public void SceneSnapshot_compatibility_constructors_create_authored_facings_and_default_motion_revision()
+    {
+        var transforms = new Dictionary<string, EvaluatedTransform>
+        {
+            ["host"] = new EvaluatedTransform(new Position3(0, 0, 0), 350),
+        };
+        var fourArgumentSnapshot = new SceneSnapshot("four", 9, 0, transforms);
+        var fiveArgumentSnapshot = new SceneSnapshot(
+            "five",
+            11,
+            0,
+            transforms,
+            new Dictionary<string, EvaluatedActorTimelineState>());
+
+        Assert.Equal(9, fourArgumentSnapshot.MotionRevision);
+        Assert.Equal(350, fourArgumentSnapshot.ActorFacings["host"].YawDegrees);
+        Assert.Equal(FacingResolutionKind.AuthoredDisabled, fourArgumentSnapshot.ActorFacings["host"].ResolutionKind);
+        Assert.Equal(11, fiveArgumentSnapshot.MotionRevision);
+        Assert.Equal(350, fiveArgumentSnapshot.ActorFacings["host"].YawDegrees);
+        Assert.Equal(FacingResolutionKind.AuthoredDisabled, fiveArgumentSnapshot.ActorFacings["host"].ResolutionKind);
+    }
+
+    [Fact]
     public void SceneDocument_rejects_invalid_duration_and_non_positive_integer_fps()
     {
         foreach (var nonFiniteValue in NonFiniteValues)
@@ -520,6 +606,25 @@ public sealed class SceneDocumentTests
     }
 
     [Fact]
+    public void Action_mutations_increment_revision_without_incrementing_motion_revision()
+    {
+        var document = CreateSemanticDocument();
+
+        document.AddActionKeyframe("host", new ActionKeyframe("host-action-2", 2, "roll"));
+        Assert.Equal(1, document.Revision);
+        Assert.Equal(0, document.MotionRevision);
+
+        var before = document.GetActionKeyframe("host", "host-action-2");
+        document.UpdateActionKeyframe("host", before, new ActionKeyframe(before.Id, 2.5, "block"));
+        Assert.Equal(2, document.Revision);
+        Assert.Equal(0, document.MotionRevision);
+
+        document.RemoveActionKeyframe("host", document.GetActionKeyframe("host", "host-action-2"));
+        Assert.Equal(3, document.Revision);
+        Assert.Equal(0, document.MotionRevision);
+    }
+
+    [Fact]
     public void Lock_on_mutation_validates_target_and_normalizes_offset()
     {
         var document = CreateSemanticDocument();
@@ -548,6 +653,86 @@ public sealed class SceneDocumentTests
         Assert.Throws<InvalidOperationException>(() => document.RemoveLockOnKeyframe(
             "host", new LockOnKeyframe(current.Id, current.TimeSeconds, current.Enabled, current.TargetActorId, current.YawOffsetDegrees, LockOnTrackingMode.Continuous)));
         Assert.Equal(1, document.Revision);
+    }
+
+    [Fact]
+    public void Actor_transform_and_lock_on_mutations_increment_both_revisions()
+    {
+        var document = new SceneDocument("motion-document", 10, 30);
+        document.AddActor(new ActorTrack("host", [
+            new TransformKeyframe("host-first", 0, new Position3(0, 0, 0), 0),
+        ]));
+        Assert.Equal(1, document.Revision);
+        Assert.Equal(1, document.MotionRevision);
+
+        document.AddActor(new ActorTrack("target", [
+            new TransformKeyframe("target-first", 0, new Position3(1, 0, 0), 0),
+        ]));
+        Assert.Equal(2, document.Revision);
+        Assert.Equal(2, document.MotionRevision);
+
+        document.AddKeyframe("host", new TransformKeyframe("host-second", 2, new Position3(2, 0, 0), 90));
+        Assert.Equal(3, document.Revision);
+        Assert.Equal(3, document.MotionRevision);
+
+        var transform = document.GetTransformKeyframe("host", "host-second");
+        document.UpdateTransformKeyframe(
+            "host",
+            transform,
+            new TransformKeyframe(transform.Id, transform.TimeSeconds, new Position3(3, 0, 0), 180));
+        Assert.Equal(4, document.Revision);
+        Assert.Equal(4, document.MotionRevision);
+
+        document.RemoveTransformKeyframe("host", document.GetTransformKeyframe("host", "host-second"));
+        Assert.Equal(5, document.Revision);
+        Assert.Equal(5, document.MotionRevision);
+
+        document.AddLockOnKeyframe(
+            "host",
+            new LockOnKeyframe("host-lock", 1, true, "target", 0, LockOnTrackingMode.Continuous));
+        Assert.Equal(6, document.Revision);
+        Assert.Equal(6, document.MotionRevision);
+
+        var lockOn = document.GetLockOnKeyframe("host", "host-lock");
+        document.UpdateLockOnKeyframe(
+            "host",
+            lockOn,
+            new LockOnKeyframe(lockOn.Id, lockOn.TimeSeconds, false, null, 0, LockOnTrackingMode.Continuous));
+        Assert.Equal(7, document.Revision);
+        Assert.Equal(7, document.MotionRevision);
+
+        document.RemoveLockOnKeyframe("host", document.GetLockOnKeyframe("host", "host-lock"));
+        Assert.Equal(8, document.Revision);
+        Assert.Equal(8, document.MotionRevision);
+    }
+
+    [Fact]
+    public void No_op_stale_and_rejected_mutations_preserve_both_revisions()
+    {
+        var document = CreateSemanticDocument();
+        var transform = document.GetTransformKeyframe("host", "host-transform");
+        var action = document.GetActionKeyframe("host", "host-action-1");
+        var lockOn = document.GetLockOnKeyframe("host", "host-lock-1");
+
+        Assert.False(document.UpdateTransformKeyframe(
+            "host",
+            transform,
+            new TransformKeyframe(transform.Id, transform.TimeSeconds, transform.Position, transform.YawDegrees + 360)));
+        Assert.False(document.UpdateActionKeyframe("host", action, action));
+        Assert.False(document.UpdateLockOnKeyframe("host", lockOn, lockOn));
+        Assert.Throws<InvalidOperationException>(() => document.UpdateTransformKeyframe(
+            "host",
+            new TransformKeyframe(transform.Id, transform.TimeSeconds, new Position3(99, 0, 0), transform.YawDegrees),
+            transform));
+        Assert.Throws<ArgumentException>(() => document.AddActor(new ActorTrack("host", [
+            new TransformKeyframe("duplicate-host", 0, new Position3(0, 0, 0), 0),
+        ])));
+        Assert.Throws<ArgumentException>(() => document.AddLockOnKeyframe(
+            "host",
+            new LockOnKeyframe("missing-target", 2, true, "missing", 0, LockOnTrackingMode.Snap)));
+
+        Assert.Equal(0, document.Revision);
+        Assert.Equal(0, document.MotionRevision);
     }
 
     [Fact]
