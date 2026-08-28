@@ -81,6 +81,44 @@ public sealed class SceneRoundTripTests
     }
 
     [Fact]
+    public void Serialize_excludes_derived_lock_on_motion_state_before_and_after_evaluation_and_round_trip()
+    {
+        var serializer = new SceneDocumentSerializer();
+        var document = CreateDocument();
+        var beforeEvaluation = serializer.Serialize(document);
+
+        var snapshot = document.CreateSnapshot(1);
+        var samplePlan = document.CreateTrajectorySamplePlan(
+            new TrajectorySamplingSettings("lock-on-motion/schema-regression/v1", 30));
+        var trajectories = document.CreateMovementTrajectories(samplePlan);
+
+        Assert.Equal(FacingResolutionKind.SnapTarget, snapshot.ActorFacings["host"].ResolutionKind);
+        Assert.NotEmpty(trajectories.Actors["host"].Samples);
+
+        var afterEvaluation = serializer.Serialize(document);
+        var reopened = serializer.Deserialize(afterEvaluation);
+        var afterRoundTrip = serializer.Serialize(reopened);
+
+        Assert.Equal(beforeEvaluation, afterEvaluation);
+        Assert.Equal(beforeEvaluation, afterRoundTrip);
+
+        using var json = JsonDocument.Parse(afterRoundTrip);
+        Assert.Equal(JsonValueKind.Object, json.RootElement.ValueKind);
+        Assert.Equal("pvp-guide-scene/2", json.RootElement.GetProperty("schema").GetString());
+
+        var propertyNames = EnumeratePropertyNames(json.RootElement).ToArray();
+        Assert.Contains("enabled", propertyNames);
+        Assert.Contains("targetActorId", propertyNames);
+        Assert.Contains("yawOffsetDegrees", propertyNames);
+        Assert.Contains("trackingMode", propertyNames);
+        Assert.DoesNotContain(propertyNames, IsDerivedRuntimePropertyName);
+
+        Assert.Equal(
+            document.Actors.SelectMany(actor => actor.LockOnKeyframes).Select(LockOnShape),
+            reopened.Actors.SelectMany(actor => actor.LockOnKeyframes).Select(LockOnShape));
+    }
+
+    [Fact]
     public void Deserialize_rejects_wrong_schema_and_unknown_members()
     {
         var serializer = new SceneDocumentSerializer();
@@ -435,6 +473,59 @@ public sealed class SceneRoundTripTests
                 [new LockOnKeyframe("l0", 0, true, "host", 0, LockOnTrackingMode.Continuous)]),
         ],
         importMetadata: new ImportMetadata("synthetic-format", "{\"unknown\":42}"));
+
+    private static IEnumerable<string> EnumeratePropertyNames(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    yield return property.Name;
+                    foreach (var descendant in EnumeratePropertyNames(property.Value))
+                    {
+                        yield return descendant;
+                    }
+                }
+
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    foreach (var descendant in EnumeratePropertyNames(item))
+                    {
+                        yield return descendant;
+                    }
+                }
+
+                break;
+        }
+    }
+
+    private static bool IsDerivedRuntimePropertyName(string propertyName)
+    {
+        string[] forbiddenTerms =
+        [
+            "facing",
+            "trajectory",
+            "trajectories",
+            "motionRevision",
+            "cache",
+            "cacheKey",
+            "currentTime",
+            "revision",
+        ];
+
+        return forbiddenTerms.Any(term => propertyName.Contains(term, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static object LockOnShape(LockOnKeyframe frame) => new
+    {
+        frame.Enabled,
+        frame.TargetActorId,
+        frame.YawOffsetDegrees,
+        frame.TrackingMode,
+    };
 
     private const string ValidSceneJson = """
         {

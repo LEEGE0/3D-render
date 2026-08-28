@@ -17,11 +17,19 @@ $readmeFile = Join-Path $RepositoryRoot 'README.md'
 $editorArchitectureFile = Join-Path $RepositoryRoot 'docs\05-editor-architecture.md'
 $roadmapFile = Join-Path $RepositoryRoot 'docs\13-roadmap.md'
 $runtimeTestScript = Join-Path $RepositoryRoot 'scripts\Test-GodotRuntime.ps1'
+$trajectoryPerformanceScript = Join-Path $RepositoryRoot 'scripts\Measure-TrajectoryPerformance.ps1'
+$serializerFile = Join-Path $infrastructureRoot 'Serialization\SceneDocumentSerializer.cs'
+$sceneRoundTripTestFile = Join-Path $infrastructureTestRoot 'SceneRoundTripTests.cs'
+$lockOnTrajectoryPlanFile = Join-Path $RepositoryRoot 'docs\superpowers\plans\2026-08-28-lock-on-facing-trajectory.md'
+$lockOnTrajectorySpecFile = Join-Path $RepositoryRoot 'docs\superpowers\specs\2026-08-28-lock-on-facing-trajectory-design.md'
 $requiredFiles = @(
     $readmeFile,
     $editorArchitectureFile,
     $roadmapFile,
     $runtimeTestScript,
+    $trajectoryPerformanceScript,
+    $lockOnTrajectoryPlanFile,
+    $lockOnTrajectorySpecFile,
     (Join-Path $projectRoot 'project.godot'),
     (Join-Path $projectRoot 'PvpGuide.Editor.csproj'),
     (Join-Path $projectRoot 'PvpGuide.Editor.sln'),
@@ -35,6 +43,19 @@ $requiredFiles = @(
     (Join-Path $domainRoot 'Timeline\TransformKeyframe.cs'),
     (Join-Path $domainRoot 'Timeline\ActionKeyframe.cs'),
     (Join-Path $domainRoot 'Timeline\LockOnKeyframe.cs'),
+    (Join-Path $domainRoot 'Timeline\FacingResolutionKind.cs'),
+    (Join-Path $domainRoot 'Timeline\EvaluatedActorFacing.cs'),
+    (Join-Path $domainRoot 'Timeline\LockOnFacingEvaluator.cs'),
+    (Join-Path $domainRoot 'Timeline\TrajectoryAnchorKind.cs'),
+    (Join-Path $domainRoot 'Timeline\TrajectorySamplingSettings.cs'),
+    (Join-Path $domainRoot 'Timeline\TrajectorySamplePlan.cs'),
+    (Join-Path $domainRoot 'Timeline\MovementTrajectorySample.cs'),
+    (Join-Path $domainRoot 'Timeline\ActorMovementTrajectory.cs'),
+    (Join-Path $domainRoot 'Timeline\MovementTrajectorySet.cs'),
+    (Join-Path $domainRoot 'Timeline\MovementTrajectoryEvaluator.cs'),
+    (Join-Path $domainRoot 'Timeline\TrajectoryEvaluationDiagnostics.cs'),
+    (Join-Path $domainRoot 'ProjectionSourceMetadata.cs'),
+    (Join-Path $domainRoot 'ISceneProjectionSource.cs'),
     (Join-Path $applicationRoot 'PvpGuide.Application.csproj'),
     (Join-Path $applicationRoot 'Properties\AssemblyInfo.cs'),
     (Join-Path $applicationRoot 'Sessions\DocumentSession.cs'),
@@ -53,6 +74,8 @@ $requiredFiles = @(
     (Join-Path $applicationRoot 'Projection\SceneProjectionController.cs'),
     (Join-Path $applicationRoot 'Projection\ITransformPreviewConsumer.cs'),
     (Join-Path $applicationRoot 'Projection\TransformPreviewController.cs'),
+    (Join-Path $applicationRoot 'Projection\SceneProjectionFrame.cs'),
+    (Join-Path $applicationRoot 'Projection\TrajectorySamplingPolicy.cs'),
     (Join-Path $infrastructureRoot 'PvpGuide.Infrastructure.csproj'),
     (Join-Path $infrastructureRoot 'Serialization\SceneDocumentSerializer.cs'),
     (Join-Path $infrastructureRoot 'Import\TopviewGuideV1Importer.cs'),
@@ -60,10 +83,20 @@ $requiredFiles = @(
     (Join-Path $projectRoot 'Features\TopView\TopViewCoordinateMapper.cs.uid'),
     (Join-Path $projectRoot 'Features\TopView\TopViewSurface.cs'),
     (Join-Path $projectRoot 'Features\TopView\TopViewSurface.cs.uid'),
+    (Join-Path $projectRoot 'Features\TopView\TrajectoryOverlayLayout.cs'),
+    (Join-Path $projectRoot 'Features\TopView\TrajectoryOverlayLayout.cs.uid'),
+    (Join-Path $projectRoot 'Features\Trajectory\TrajectoryTickSelectionPolicy.cs'),
+    (Join-Path $projectRoot 'Features\Trajectory\TrajectoryTickSelectionPolicy.cs.uid'),
     (Join-Path $projectRoot 'Features\ViewportSync\WorldViewProjectionAdapter.cs'),
     (Join-Path $projectRoot 'Features\ViewportSync\WorldViewProjectionAdapter.cs.uid'),
     (Join-Path $projectRoot 'Features\ViewportSync\WorldTransformMapper.cs'),
     (Join-Path $projectRoot 'Features\ViewportSync\WorldTransformMapper.cs.uid'),
+    (Join-Path $projectRoot 'Features\ViewportSync\WorldTrajectoryGeometry.cs'),
+    (Join-Path $projectRoot 'Features\ViewportSync\WorldTrajectoryGeometry.cs.uid'),
+    (Join-Path $projectRoot 'Features\ViewportSync\WorldTrajectoryRenderState.cs'),
+    (Join-Path $projectRoot 'Features\ViewportSync\WorldTrajectoryRenderState.cs.uid'),
+    (Join-Path $projectRoot 'Features\ViewportSync\TrajectoryTimeFade.gdshader'),
+    (Join-Path $projectRoot 'Features\ViewportSync\TrajectoryTimeFade.gdshader.uid'),
     (Join-Path $projectRoot 'Features\Inspector\TransformInspectorController.cs'),
     (Join-Path $projectRoot 'Features\Inspector\TransformInspectorController.cs.uid'),
     (Join-Path $projectRoot 'Features\Timeline\TimelineController.cs'),
@@ -88,6 +121,9 @@ $requiredFiles = @(
     (Join-Path $testRoot 'PvpGuide.Domain.Tests.csproj'),
     (Join-Path $testRoot 'DomainAssemblyTests.cs'),
     (Join-Path $testRoot 'SceneDocumentTests.cs'),
+    (Join-Path $testRoot 'LockOnFacingEvaluatorTests.cs'),
+    (Join-Path $testRoot 'MovementTrajectoryEvaluatorTests.cs'),
+    (Join-Path $testRoot 'TrajectoryPerformanceContractTests.cs'),
     (Join-Path $applicationTestRoot 'PvpGuide.Application.Tests.csproj'),
     (Join-Path $applicationTestRoot 'DocumentSessionTests.cs'),
     (Join-Path $applicationTestRoot 'PlaybackClockTests.cs'),
@@ -102,7 +138,10 @@ $requiredFiles = @(
     (Join-Path $editorTestRoot 'RenderQueueTests.cs'),
     (Join-Path $editorTestRoot 'TimelineTimeFormatterTests.cs'),
     (Join-Path $editorTestRoot 'TransformTrackLayoutTests.cs'),
-    (Join-Path $editorTestRoot 'StepTrackLayoutTests.cs')
+    (Join-Path $editorTestRoot 'StepTrackLayoutTests.cs'),
+    (Join-Path $editorTestRoot 'SemanticOverlayLayoutTests.cs'),
+    (Join-Path $editorTestRoot 'TrajectoryOverlayLayoutTests.cs'),
+    (Join-Path $editorTestRoot 'WorldTrajectoryGeometryTests.cs')
 )
 
 foreach ($requiredFile in $requiredFiles) {
@@ -169,6 +208,16 @@ $playbackClockFile = Join-Path $applicationRoot 'Playback\PlaybackClock.cs'
 $timelineTimeFormatterFile = Join-Path $projectRoot 'Features\Timeline\TimelineTimeFormatter.cs'
 $transformTrackLayoutFile = Join-Path $projectRoot 'Features\Timeline\TransformTrackLayout.cs'
 $stepTrackLayoutFile = Join-Path $projectRoot 'Features\Timeline\StepTrackLayout.cs'
+$runtimeExactMarker = 'LOCK_ON_MOTION_READY snap=1 continuous=1 keyframe_only=1 coincidence=1 missing_target=1 shared_frame=1 trajectories=1 cache_reuse=1 nodes_reused=1'
+$runtimeRequiredOutputEntry = "'$runtimeExactMarker'"
+$runtimeRequiredOutputEntryPattern = '(?ms)(?-i)^\)[\t ]+-RequiredOutput[\t ]+@\([\t ]*\r?\n(?:(?!^\)[\t ]*\r?$).)*?^[\t ]*' + [regex]::Escape($runtimeRequiredOutputEntry) + '[\t ]*,?[\t ]*\r?$(?:(?!^\)[\t ]*\r?$).)*?^\)[\t ]*\r?$'
+$performanceResultContract = 'TRAJECTORY_PERFORMANCE_RESULT\s+fixture=(?<fixture>\S+)\s+build_p95_ms=(?<build>\d+(?:\.\d+)?)\s+snapshot_p95_ms=(?<snapshot>\d+(?:\.\d+)?)\s+actors=(?<actors>\d+)\s+samples=(?<samples>\d+)\s+keys=(?<keys>\d+)\s+segment_steps=(?<steps>\d+)'
+$performanceResultParserLine = '$markerPattern = ' + "'$performanceResultContract'"
+$performanceResultParserPattern = '(?m)(?-i)^[\t ]*' + [regex]::Escape($performanceResultParserLine) + '[\t ]*\r?$'
+$performancePassOutputLine = 'Write-Output "TRAJECTORY_PERFORMANCE_GATE=PASS build_p95_ms=$($buildP95.ToString(''F6'', $invariantCulture)) limit_ms=$($BuildGateMilliseconds.ToString(''F2'', $invariantCulture))"'
+$performancePassOutputPattern = '(?m)(?-i)^[\t ]*' + [regex]::Escape($performancePassOutputLine) + '[\t ]*\r?$'
+$performanceDefaultGatePattern = '(?m)(?-i)^[\t ]*\[double\]\$BuildGateMilliseconds[\t ]*=[\t ]*8\.0[\t ]*\r?$'
+$performanceGateComparisonPattern = '(?m)(?-i)^[\t ]*if[\t ]*\(\$buildP95[\t ]+-gt[\t ]+\$BuildGateMilliseconds\)[\t ]*\{[\t ]*\r?$'
 
 Assert-Contains $projectFile 'run/main_scene="res://Scenes/Main/Main\.tscn"' '메인 장면 설정'
 Assert-Contains $projectFile '"C#"' 'C# 기능 설정'
@@ -190,6 +239,13 @@ Assert-NotContains $playbackClockFile 'Godot|Node|Timer' 'PlaybackClock의 Godot
 Assert-NotContains $timelineTimeFormatterFile 'Godot|Node|Control' 'TimelineTimeFormatter의 Godot 독립성'
 Assert-NotContains $transformTrackLayoutFile 'Godot|Node|Control|Vector' 'TransformTrackLayout의 Godot 독립성'
 Assert-NotContains $stepTrackLayoutFile 'Godot|Node|Control|Vector' 'StepTrackLayout의 Godot 독립성'
+Assert-Contains $runtimeTestScript $runtimeRequiredOutputEntryPattern 'Lock-on 방향·궤적 runtime RequiredOutput exact entry'
+Assert-Contains $serializerFile ([regex]::Escape('private const string CurrentSchemaV2 = "pvp-guide-scene/2";')) 'serializer schema /2 상수'
+Assert-Contains $sceneRoundTripTestFile ([regex]::Escape('"schema": "pvp-guide-scene/2"')) 'scene round-trip schema /2 fixture'
+Assert-Contains $trajectoryPerformanceScript $performanceResultParserPattern '궤적 성능 ordered result marker parser'
+Assert-Contains $trajectoryPerformanceScript $performancePassOutputPattern '궤적 성능 exact gate 통과 marker'
+Assert-Contains $trajectoryPerformanceScript $performanceDefaultGatePattern '궤적 성능 default 8ms gate'
+Assert-Contains $trajectoryPerformanceScript $performanceGateComparisonPattern '궤적 성능 build p95 gate 비교'
 
 foreach ($nodeName in @('TopViewPanel', 'WorldViewPanel', 'TimelinePanel', 'InspectorPanel')) {
     Assert-Contains $sceneFile ([regex]::Escape('name="' + $nodeName + '"')) "장면 노드 $nodeName"
