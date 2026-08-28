@@ -192,15 +192,30 @@ public sealed class SceneProjectionController : IDisposable
             cached.MotionRevision == metadata.MotionRevision &&
             string.Equals(cached.Fingerprint, plan.Fingerprint, StringComparison.Ordinal))
         {
-            return cached.Trajectories.WithRevision(metadata.Revision);
+            var cachedForRevision = cached.Trajectories.WithRevision(metadata.Revision);
+            ValidateTrajectoryUniformRate(cachedForRevision, plan);
+            return cachedForRevision;
         }
 
         var trajectories = _source.CreateMovementTrajectories(plan);
+        ValidateTrajectoryUniformRate(trajectories, plan);
         _cachedTrajectories = new CachedTrajectories(
             metadata.MotionRevision,
             plan.Fingerprint,
             trajectories);
         return trajectories;
+    }
+
+    private static void ValidateTrajectoryUniformRate(
+        MovementTrajectorySet trajectories,
+        TrajectorySamplePlan plan)
+    {
+        if (trajectories.UniformRate != plan.UniformRate)
+        {
+            var actualRate = trajectories.UniformRate?.ToString() ?? "missing";
+            throw new InvalidOperationException(
+                $"Projection trajectory uniform rate '{actualRate}' does not match plan rate {plan.UniformRate}.");
+        }
     }
 
     private static void ValidateMetadata(

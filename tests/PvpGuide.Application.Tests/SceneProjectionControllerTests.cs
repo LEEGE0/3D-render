@@ -128,6 +128,46 @@ public sealed class SceneProjectionControllerTests
         Assert.Equal(1, source.CreateTrajectoriesCalls);
     }
 
+    [Fact]
+    public void Legacy_trajectory_set_without_uniform_rate_is_rejected_before_cache_or_publish()
+    {
+        var source = new ControllableProjectionSource
+        {
+            ReturnLegacyTrajectories = true,
+        };
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        var error = Assert.Throws<InvalidOperationException>(controller.ProjectCurrent);
+
+        Assert.Contains("uniform rate", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(top.Received);
+        Assert.Empty(world.Received);
+        Assert.Equal(1, source.CreateTrajectoriesCalls);
+        Assert.Equal(0, controller.CachedTrajectoryEntryCount);
+    }
+
+    [Fact]
+    public void Trajectory_set_rate_mismatch_is_rejected_before_cache_or_publish_even_with_matching_fingerprint()
+    {
+        var source = new ControllableProjectionSource
+        {
+            ReturnedTrajectoryUniformRate = 4,
+        };
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        var error = Assert.Throws<InvalidOperationException>(controller.ProjectCurrent);
+
+        Assert.Contains("uniform rate", error.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(top.Received);
+        Assert.Empty(world.Received);
+        Assert.Equal(1, source.CreateTrajectoriesCalls);
+        Assert.Equal(0, controller.CachedTrajectoryEntryCount);
+    }
+
     [Theory]
     [InlineData(60, 3)]
     [InlineData(3, 60)]
@@ -171,6 +211,8 @@ public sealed class SceneProjectionControllerTests
         Assert.NotSame(top.Received[0].Trajectories, top.Received[1].Trajectories);
         Assert.Same(top.Received[0].Trajectories.Actors, top.Received[1].Trajectories.Actors);
         Assert.Equal(1, top.Received[1].Trajectories.Revision);
+        Assert.Equal(30, top.Received[0].Trajectories.UniformRate);
+        Assert.Equal(top.Received[0].Trajectories.UniformRate, top.Received[1].Trajectories.UniformRate);
     }
 
     [Fact]
@@ -421,6 +463,10 @@ public sealed class SceneProjectionControllerTests
 
         public int? ReturnedUniformRate { get; init; }
 
+        public int? ReturnedTrajectoryUniformRate { get; init; }
+
+        public bool ReturnLegacyTrajectories { get; init; }
+
         public Action? BeforeNextSnapshot { get; set; }
 
         public Action? BeforeNextPlanReturn { get; set; }
@@ -466,7 +512,16 @@ public sealed class SceneProjectionControllerTests
         public MovementTrajectorySet CreateMovementTrajectories(TrajectorySamplePlan plan)
         {
             CreateTrajectoriesCalls++;
-            return CreateTrajectories("source", _revision, _motionRevision, plan.Fingerprint);
+            return ReturnLegacyTrajectories
+                ? CreateTrajectories("source", _revision, _motionRevision, plan.Fingerprint)
+                : new MovementTrajectorySet(
+                    "source",
+                    _revision,
+                    _motionRevision,
+                    plan.Fingerprint,
+                    ReturnedTrajectoryUniformRate ?? plan.UniformRate,
+                    new Dictionary<string, ActorMovementTrajectory>(),
+                    segmentSteps: 0);
         }
 
         public void Publish(long revision, long motionRevision)
