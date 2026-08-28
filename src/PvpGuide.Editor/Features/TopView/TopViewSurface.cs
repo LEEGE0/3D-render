@@ -4,6 +4,7 @@ using PvpGuide.Application.Editing;
 using PvpGuide.Application.Projection;
 using PvpGuide.Application.Sessions;
 using PvpGuide.Domain;
+using PvpGuide.Domain.Timeline;
 using PvpGuide.Editor.Features.Timeline;
 
 namespace PvpGuide.Editor.Features.TopView;
@@ -25,13 +26,22 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         new ReadOnlyDictionary<string, SemanticActorOverlay>(
             new Dictionary<string, SemanticActorOverlay>(StringComparer.Ordinal));
 
+    private static readonly IReadOnlyDictionary<string, ActorDisplayInfo> EmptyDisplayInfos =
+        new ReadOnlyDictionary<string, ActorDisplayInfo>(
+            new Dictionary<string, ActorDisplayInfo>(StringComparer.Ordinal));
+
     private readonly Color _gridColor = new("263248");
     private readonly Color _actorColor = new("55aaff");
     private readonly Color _selectedColor = new("ffd166");
     private readonly Color _previewColor = new("7ee787");
     private readonly Color _lockColor = new("ff6b6b");
+    private readonly Color _sharedPathColor = new("6ea8fe");
+    private readonly Color _freeFacingColor = new("55aaff");
+    private readonly Color _lockFacingColor = new("ffd166");
     private DocumentSession? _session;
     private SceneSnapshot? _latestSnapshot;
+    private TopViewTrajectoryDisplay? _trajectoryDisplay;
+    private IReadOnlyDictionary<string, ActorDisplayInfo> _displayInfos = EmptyDisplayInfos;
     private TransformPreview? _preview;
     private string? _selectedActorId;
     private DragMode _dragMode;
@@ -49,6 +59,12 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         ]);
 
     public int ApplyCount { get; private set; }
+
+    public static IReadOnlyList<TopViewDrawLayer> DrawLayerOrder => TrajectoryOverlayLayout.DrawLayerOrder;
+
+    public MovementTrajectorySet? DisplayedTrajectories => _trajectoryDisplay?.DisplayedTrajectories;
+
+    public TrajectoryOverlayGeometry? DisplayedTrajectoryGeometry => _trajectoryDisplay?.Geometry;
 
     public IReadOnlyDictionary<string, SemanticActorOverlay> DisplayedSemanticOverlays { get; private set; } =
         EmptySemanticOverlays;
@@ -81,8 +97,16 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         ArgumentNullException.ThrowIfNull(frame);
         var snapshot = frame.Snapshot;
         var overlays = SemanticOverlayLayout.CreateScene(snapshot, CreateDisplayedPositions(_preview));
+        var trajectoryDisplay = TrajectoryOverlayLayout.CreateDisplay(
+            frame,
+            _trajectoryDisplay,
+            _selectedActorId,
+            _preview);
+        var displayInfos = CreateDisplayInfos(snapshot);
         _latestSnapshot = snapshot;
         DisplayedSemanticOverlays = overlays;
+        _trajectoryDisplay = trajectoryDisplay;
+        _displayInfos = displayInfos;
         ApplyCount++;
 
         if (_selectedActorId is not null && !snapshot.ActorTransforms.ContainsKey(_selectedActorId))
@@ -100,34 +124,104 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
             : SemanticOverlayLayout.CreateScene(_latestSnapshot, CreateDisplayedPositions(preview));
         _preview = preview;
         DisplayedSemanticOverlays = overlays;
+        if (_trajectoryDisplay is not null)
+        {
+            _trajectoryDisplay = TrajectoryOverlayLayout.WithPreview(_trajectoryDisplay, preview);
+        }
+
         QueueRedraw();
     }
 
     public override void _Draw()
     {
         DrawGrid();
-        var snapshot = _latestSnapshot;
-        if (snapshot is null)
+        var display = _trajectoryDisplay;
+        if (display is null)
         {
             return;
         }
 
         var mapper = CreateMapper();
-        foreach (var layer in SemanticDrawLayerOrder)
+        foreach (var layer in DrawLayerOrder)
         {
             switch (layer)
             {
-                case TopViewSemanticDrawLayer.LockLines:
+                case TopViewDrawLayer.SharedPaths:
+                    DrawSharedPaths(mapper, display.Presentation);
+                    break;
+                case TopViewDrawLayer.FreeFacingTicks:
+                    DrawFacingTicks(mapper, display.Presentation, lockOn: false);
+                    break;
+                case TopViewDrawLayer.LockOnFacingTicks:
+                    DrawFacingTicks(mapper, display.Presentation, lockOn: true);
+                    break;
+                case TopViewDrawLayer.LockLines:
                     DrawLockLines(mapper, DisplayedSemanticOverlays);
                     break;
-                case TopViewSemanticDrawLayer.ActorBodies:
-                    DrawActorBodies(snapshot, mapper, DisplayedSemanticOverlays);
+                case TopViewDrawLayer.ActorBodies:
+                    DrawActorBodies(mapper, display.ActorBodies);
                     break;
-                case TopViewSemanticDrawLayer.TargetMarkers:
+                case TopViewDrawLayer.TargetMarkers:
                     DrawTargetMarkers(mapper, DisplayedSemanticOverlays);
                     break;
+                case TopViewDrawLayer.Text:
+                    DrawActorText(mapper, display.ActorBodies, DisplayedSemanticOverlays);
+                    break;
                 default:
-                    throw new InvalidOperationException($"Unsupported top-view semantic draw layer: {layer}.");
+                    throw new InvalidOperationException($"Unsupported top-view draw layer: {layer}.");
+            }
+        }
+    }
+
+    private void DrawSharedPaths(
+        TopViewCoordinateMapper mapper,
+        TrajectoryOverlayPresentation presentation)
+    {
+        foreach (var actor in presentation.Actors.Values)
+        {
+            for (var index = 1; index < actor.SharedPath.Count; index++)
+            {
+                var previous = actor.SharedPath[index - 1];
+                var current = actor.SharedPath[index];
+                var brightness = Math.Min(previous.Brightness, current.Brightness) * actor.SelectionBrightness;
+                DrawLine(
+                    ToVector2(mapper.WorldToScreen(previous.Position)),
+                    ToVector2(mapper.WorldToScreen(current.Position)),
+                    WithBrightness(_sharedPathColor, brightness),
+                    2,
+                    true);
+            }
+        }
+    }
+
+    private void DrawFacingTicks(
+        TopViewCoordinateMapper mapper,
+        TrajectoryOverlayPresentation presentation,
+        bool lockOn)
+    {
+        foreach (var actor in presentation.Actors.Values)
+        {
+            var ticks = lockOn ? actor.LockOnFacingTicks : actor.FreeFacingTicks;
+            var baseColor = lockOn ? _lockFacingColor : _freeFacingColor;
+            var length = lockOn ? 14 : 10;
+            var width = lockOn ? 3 : 2;
+            foreach (var tick in ticks)
+            {
+                var centerPoint = mapper.WorldToScreen(tick.Position);
+                var center = ToVector2(centerPoint);
+                var end = ToVector2(mapper.RotationHandlePosition(centerPoint, tick.YawDegrees, length));
+                var color = WithBrightness(baseColor, tick.Brightness * actor.SelectionBrightness);
+                DrawLine(center, end, color, width, true);
+
+                if (!lockOn && (tick.AnchorMarker & TopViewAnchorMarker.TransformCircle) != 0)
+                {
+                    DrawArc(center, 5, 0, Mathf.Tau, 16, color, 2, true);
+                }
+
+                if (lockOn && (tick.AnchorMarker & TopViewAnchorMarker.LockOnDiamond) != 0)
+                {
+                    DrawDiamond(center, 4, color);
+                }
             }
         }
     }
@@ -150,21 +244,20 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     }
 
     private void DrawActorBodies(
-        SceneSnapshot snapshot,
         TopViewCoordinateMapper mapper,
-        IReadOnlyDictionary<string, SemanticActorOverlay> overlays)
+        IReadOnlyDictionary<string, TopViewActorBodyLayout> bodies)
     {
-        foreach (var (actorId, committed) in snapshot.ActorTransforms)
+        foreach (var (actorId, body) in bodies)
         {
-            var transform = GetDisplayedTransform(actorId, committed);
-            var center = ToVector2(mapper.WorldToScreen(transform.Position));
+            var centerPoint = mapper.WorldToScreen(body.Position);
+            var center = ToVector2(centerPoint);
             var selected = actorId == _selectedActorId;
             var previewing = _preview?.ActorId == actorId;
             var bodyColor = previewing ? _previewColor : selected ? _selectedColor : _actorColor;
-            var displayInfo = GetDisplayInfo(actorId);
-            var handle = ToVector2(mapper.RotationHandlePosition(
-                new ScreenPoint(center.X, center.Y),
-                transform.YawDegrees));
+            var displayInfo = _displayInfos.TryGetValue(actorId, out var storedDisplayInfo)
+                ? storedDisplayInfo
+                : new ActorDisplayInfo(actorId, actorId, "알 수 없음");
+            var facingEnd = ToVector2(mapper.RotationHandlePosition(centerPoint, body.YawDegrees));
 
             if (UsesHostileBodyShape(displayInfo.Role))
             {
@@ -182,11 +275,31 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
                 DrawCircle(center, ActorRadiusPixels, bodyColor);
             }
 
-            DrawLine(center, handle, bodyColor, 3, true);
+            DrawLine(center, facingEnd, bodyColor, 3, true);
             if (selected)
             {
-                DrawCircle(handle, 5, bodyColor);
+                var authoredHandle = ToVector2(mapper.RotationHandlePosition(
+                    centerPoint,
+                    body.AuthoredYawDegrees));
+                DrawCircle(authoredHandle, 5, bodyColor);
             }
+        }
+    }
+
+    private void DrawActorText(
+        TopViewCoordinateMapper mapper,
+        IReadOnlyDictionary<string, TopViewActorBodyLayout> bodies,
+        IReadOnlyDictionary<string, SemanticActorOverlay> overlays)
+    {
+        foreach (var (actorId, body) in bodies)
+        {
+            var center = ToVector2(mapper.WorldToScreen(body.Position));
+            var selected = actorId == _selectedActorId;
+            var previewing = _preview?.ActorId == actorId;
+            var bodyColor = previewing ? _previewColor : selected ? _selectedColor : _actorColor;
+            var displayInfo = _displayInfos.TryGetValue(actorId, out var storedDisplayInfo)
+                ? storedDisplayInfo
+                : new ActorDisplayInfo(actorId, actorId, "알 수 없음");
 
             DrawString(
                 GetThemeDefaultFont(),
@@ -196,7 +309,7 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
                 -1,
                 14,
                 bodyColor);
-            if (overlays[actorId].ActionLabel is { } actionLabel)
+            if (overlays.TryGetValue(actorId, out var overlay) && overlay.ActionLabel is { } actionLabel)
             {
                 DrawString(
                     GetThemeDefaultFont(),
@@ -216,6 +329,18 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
                 -1,
                 13,
                 bodyColor);
+
+            if (overlay?.LockBadge is { } lockBadge)
+            {
+                DrawString(
+                    GetThemeDefaultFont(),
+                    center + new Vector2(17, 44),
+                    lockBadge,
+                    HorizontalAlignment.Left,
+                    -1,
+                    12,
+                    _lockColor);
+            }
         }
     }
 
@@ -299,8 +424,10 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
             FocusExited -= OnFocusExited;
             _session = null;
             _latestSnapshot = null;
+            _trajectoryDisplay = null;
             _preview = null;
             DisplayedSemanticOverlays = EmptySemanticOverlays;
+            _displayInfos = EmptyDisplayInfos;
             _dragMode = DragMode.None;
             _disposed = true;
         }
@@ -523,6 +650,13 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     private void OnSelectionChanged(object? sender, SelectionChangedEventArgs eventArgs)
     {
         _selectedActorId = eventArgs.SelectedActorId;
+        if (_trajectoryDisplay is not null)
+        {
+            _trajectoryDisplay = TrajectoryOverlayLayout.WithSelection(
+                _trajectoryDisplay,
+                _selectedActorId);
+        }
+
         ResetDrag();
         QueueRedraw();
     }
@@ -539,17 +673,27 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
 
     private void OnFocusExited() => CancelDrag();
 
-    private ActorDisplayInfo GetDisplayInfo(string actorId)
+    private IReadOnlyDictionary<string, ActorDisplayInfo> CreateDisplayInfos(SceneSnapshot snapshot)
     {
-        try
+        var displayInfos = new Dictionary<string, ActorDisplayInfo>(
+            snapshot.ActorTransforms.Count,
+            StringComparer.Ordinal);
+        foreach (var actorId in snapshot.ActorTransforms.Keys)
         {
-            return _session?.GetActorDisplayInfo(actorId)
-                ?? new ActorDisplayInfo(actorId, actorId, "알 수 없음");
+            try
+            {
+                displayInfos.Add(
+                    actorId,
+                    _session?.GetActorDisplayInfo(actorId)
+                        ?? new ActorDisplayInfo(actorId, actorId, "알 수 없음"));
+            }
+            catch (ArgumentException)
+            {
+                displayInfos.Add(actorId, new ActorDisplayInfo(actorId, actorId, "알 수 없음"));
+            }
         }
-        catch (ArgumentException)
-        {
-            return new ActorDisplayInfo(actorId, actorId, "알 수 없음");
-        }
+
+        return new ReadOnlyDictionary<string, ActorDisplayInfo>(displayInfos);
     }
 
     public static bool UsesHostileBodyShape(string role)
@@ -564,6 +708,24 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
     private static ScreenPoint ToScreenPoint(Vector2 position) => new(position.X, position.Y);
 
     private static Vector2 ToVector2(ScreenPoint point) => new((float)point.X, (float)point.Y);
+
+    private void DrawDiamond(Vector2 center, float radius, Color color)
+    {
+        var top = center + new Vector2(0, -radius);
+        var right = center + new Vector2(radius, 0);
+        var bottom = center + new Vector2(0, radius);
+        var left = center + new Vector2(-radius, 0);
+        DrawLine(top, right, color, 2, true);
+        DrawLine(right, bottom, color, 2, true);
+        DrawLine(bottom, left, color, 2, true);
+        DrawLine(left, top, color, 2, true);
+    }
+
+    private static Color WithBrightness(Color color, double brightness)
+    {
+        var factor = (float)Math.Clamp(brightness, 0, 1);
+        return new Color(color.R * factor, color.G * factor, color.B * factor, color.A);
+    }
 
     private static void ReportInputError(string message) => GD.PushWarning(message);
 

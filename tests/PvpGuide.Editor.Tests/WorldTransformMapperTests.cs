@@ -84,6 +84,34 @@ public sealed class WorldTransformMapperTests
         Assert.Equal(radians, WorldTransformMapper.ToRotationYRadians(yaw), precision: 10);
     }
 
+    [Theory]
+    [InlineData(0, 1, 0)]
+    [InlineData(90, 0, 1)]
+    [InlineData(180, -1, 0)]
+    [InlineData(270, 0, -1)]
+    public void Domain_yaw_rotates_local_positive_x_to_the_same_world_cardinal_direction(
+        double yawDegrees,
+        double expectedX,
+        double expectedZ)
+    {
+        var facing = WorldFacingTransform.Create(yawDegrees, modelForwardOffsetDegrees: 0);
+
+        Assert.Equal(expectedX, facing.WorldFacingPositiveX.X, precision: 10);
+        Assert.Equal(expectedZ, facing.WorldFacingPositiveX.Z, precision: 10);
+    }
+
+    [Fact]
+    public void Model_forward_offset_changes_only_visual_local_rotation()
+    {
+        var withoutOffset = WorldFacingTransform.Create(90, modelForwardOffsetDegrees: 0);
+        var withOffset = WorldFacingTransform.Create(90, modelForwardOffsetDegrees: 30);
+
+        Assert.Equal(-Math.PI / 2, withoutOffset.ActorRootRotationYRadians, precision: 10);
+        Assert.Equal(withoutOffset.ActorRootRotationYRadians, withOffset.ActorRootRotationYRadians);
+        Assert.Equal(0, withoutOffset.VisualLocalRotationYRadians);
+        Assert.Equal(-Math.PI / 6, withOffset.VisualLocalRotationYRadians, precision: 10);
+    }
+
     [Fact]
     public void Domain_rejects_non_finite_position_before_world_mapping()
     {
