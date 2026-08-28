@@ -10,9 +10,17 @@ public sealed record WorldOverlayLabelStyle(BaseMaterial3D.BillboardModeEnum Bil
 
 public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITransformPreviewConsumer
 {
+    private const string TrajectoryShaderPath =
+        "res://Features/ViewportSync/TrajectoryTimeFade.gdshader";
+
     private readonly Node3D _actorsRoot;
     private readonly Dictionary<string, ActorProjectionNodes> _actorNodes = new(StringComparer.Ordinal);
+    private readonly Node3D _trajectoryOverlayRoot;
+    private readonly Shader _trajectoryShader;
+    private readonly Dictionary<string, ActorTrajectoryProjectionNodes> _actorTrajectoryNodes =
+        new(StringComparer.Ordinal);
     private SceneSnapshot? _latestSnapshot;
+    private WorldTrajectoryRenderState? _trajectoryRenderState;
     private TransformPreview? _preview;
 
     public static WorldOverlayLabelStyle OverlayLabelStyle { get; } =
@@ -21,17 +29,24 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
     public WorldViewProjectionAdapter(Node3D actorsRoot)
     {
         _actorsRoot = actorsRoot ?? throw new ArgumentNullException(nameof(actorsRoot));
+        _trajectoryShader = GD.Load<Shader>(TrajectoryShaderPath)
+            ?? throw new InvalidOperationException($"Could not load trajectory shader '{TrajectoryShaderPath}'.");
+        _trajectoryOverlayRoot = new Node3D { Name = "TrajectoryOverlayRoot" };
+        _actorsRoot.AddChild(_trajectoryOverlayRoot);
     }
 
     public int ApplyCount { get; private set; }
 
     public int ActorCount => _actorNodes.Count;
 
+    public int TrajectoryActorCount => _actorTrajectoryNodes.Count;
+
     public void Apply(SceneProjectionFrame frame)
     {
         ArgumentNullException.ThrowIfNull(frame);
         var snapshot = frame.Snapshot;
         var overlays = CreateSemanticOverlays(snapshot, _preview);
+        var trajectoryRenderState = WorldTrajectoryRenderState.Create(frame, _trajectoryRenderState);
         _latestSnapshot = snapshot;
         ApplyCount++;
 
@@ -45,14 +60,29 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
             ownedNode.ActorRoot.QueueFree();
         }
 
+        var removedTrajectoryActorIds = _actorTrajectoryNodes.Keys
+            .Where(actorId => !trajectoryRenderState.ActorGeometries.ContainsKey(actorId))
+            .ToArray();
+        foreach (var actorId in removedTrajectoryActorIds)
+        {
+            var ownedNode = _actorTrajectoryNodes[actorId];
+            _actorTrajectoryNodes.Remove(actorId);
+            ownedNode.Container.QueueFree();
+        }
+
         foreach (var (actorId, transform) in snapshot.ActorTransforms)
         {
             var nodes = GetOrCreateActorNodes(actorId);
-            ApplyTransform(nodes.ActorRoot, transform.Position, transform.YawDegrees);
+            var yawDegrees = snapshot.ActorFacings.TryGetValue(actorId, out var facing)
+                ? facing.YawDegrees
+                : transform.YawDegrees;
+            ApplyTransform(nodes.ActorRoot, transform.Position, yawDegrees);
         }
 
         ApplyActivePreview();
         ApplyOverlays(overlays);
+        ApplyTrajectoryRenderState(trajectoryRenderState);
+        _trajectoryRenderState = trajectoryRenderState;
     }
 
     public void ApplyPreview(TransformPreview? preview)
@@ -172,7 +202,10 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
         {
             if (_actorNodes.TryGetValue(actorId, out var nodes))
             {
-                ApplyTransform(nodes.ActorRoot, transform.Position, transform.YawDegrees);
+                var yawDegrees = _latestSnapshot.ActorFacings.TryGetValue(actorId, out var facing)
+                    ? facing.YawDegrees
+                    : transform.YawDegrees;
+                ApplyTransform(nodes.ActorRoot, transform.Position, yawDegrees);
             }
         }
     }
@@ -184,6 +217,103 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
             ApplyTransform(nodes.ActorRoot, _preview.Position, _preview.YawDegrees);
         }
     }
+
+    private void ApplyTrajectoryRenderState(WorldTrajectoryRenderState state)
+    {
+        foreach (var (actorId, geometry) in state.ActorGeometries)
+        {
+            var nodes = GetOrCreateTrajectoryNodes(actorId);
+            if (!ReferenceEquals(nodes.Geometry, geometry))
+            {
+                RewriteTrajectoryMesh(
+                    nodes.SharedPath.Mesh,
+                    geometry.SharedPath,
+                    Mesh.PrimitiveType.LineStrip);
+                RewriteTrajectoryMesh(
+                    nodes.FreeFacingTicks.Mesh,
+                    geometry.FreeFacingTicks,
+                    Mesh.PrimitiveType.Lines);
+                RewriteTrajectoryMesh(
+                    nodes.LockOnFacingTicks.Mesh,
+                    geometry.LockOnFacingTicks,
+                    Mesh.PrimitiveType.Lines);
+                nodes.Geometry = geometry;
+            }
+
+            ApplyCurrentTime(nodes.SharedPath.Material, state.CurrentTimeNormalized);
+            ApplyCurrentTime(nodes.FreeFacingTicks.Material, state.CurrentTimeNormalized);
+            ApplyCurrentTime(nodes.LockOnFacingTicks.Material, state.CurrentTimeNormalized);
+        }
+    }
+
+    private ActorTrajectoryProjectionNodes GetOrCreateTrajectoryNodes(string actorId)
+    {
+        if (_actorTrajectoryNodes.TryGetValue(actorId, out var existing))
+        {
+            return existing;
+        }
+
+        var container = new Node3D
+        {
+            Name = CreateTrajectoryNodeName(
+                actorId,
+                _actorTrajectoryNodes.Values.Select(nodes => nodes.Container.Name.ToString())),
+        };
+        _trajectoryOverlayRoot.AddChild(container);
+
+        var sharedPath = CreateTrajectoryMesh("SharedTrajectory", new Color("6ea8fe"));
+        var freeFacingTicks = CreateTrajectoryMesh("FreeFacingTicks", new Color("55aaff"));
+        var lockOnFacingTicks = CreateTrajectoryMesh("LockOnFacingTicks", new Color("ffd166"));
+        container.AddChild(sharedPath.Instance);
+        container.AddChild(freeFacingTicks.Instance);
+        container.AddChild(lockOnFacingTicks.Instance);
+
+        var created = new ActorTrajectoryProjectionNodes(
+            container,
+            sharedPath,
+            freeFacingTicks,
+            lockOnFacingTicks);
+        _actorTrajectoryNodes.Add(actorId, created);
+        return created;
+    }
+
+    private TrajectoryMeshProjectionNodes CreateTrajectoryMesh(string name, Color color)
+    {
+        var mesh = new ImmediateMesh();
+        var material = new ShaderMaterial { Shader = _trajectoryShader };
+        material.SetShaderParameter("base_color", color);
+        var instance = new MeshInstance3D
+        {
+            Name = name,
+            Mesh = mesh,
+            MaterialOverride = material,
+        };
+        return new TrajectoryMeshProjectionNodes(instance, mesh, material);
+    }
+
+    private static void RewriteTrajectoryMesh(
+        ImmediateMesh mesh,
+        WorldTrajectoryMeshGeometry geometry,
+        Mesh.PrimitiveType primitiveType)
+    {
+        mesh.ClearSurfaces();
+        if (geometry.Vertices.Count < 2)
+        {
+            return;
+        }
+
+        mesh.SurfaceBegin(primitiveType);
+        for (var index = 0; index < geometry.Vertices.Count; index++)
+        {
+            mesh.SurfaceSetUV(new Vector2((float)geometry.NormalizedTimes[index], 0));
+            mesh.SurfaceAddVertex(ToVector3(geometry.Vertices[index]));
+        }
+
+        mesh.SurfaceEnd();
+    }
+
+    private static void ApplyCurrentTime(ShaderMaterial material, double currentTimeNormalized) =>
+        material.SetShaderParameter("current_time_normalized", (float)currentTimeNormalized);
 
     private void ApplyOverlays(IReadOnlyDictionary<string, SemanticActorOverlay> overlays)
     {
@@ -304,10 +434,55 @@ public sealed class WorldViewProjectionAdapter : ISceneProjectionConsumer, ITran
         return candidate;
     }
 
+    private static string CreateTrajectoryNodeName(string actorId, IEnumerable<string> existingNames)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(actorId);
+        ArgumentNullException.ThrowIfNull(existingNames);
+        var assigned = existingNames.ToHashSet(StringComparer.Ordinal);
+        var baseName = $"Trajectory_{SanitizeNodeName(actorId)}";
+        if (!assigned.Contains(baseName))
+        {
+            return baseName;
+        }
+
+        var stableSuffix = string.Join("_", actorId.Select(character => $"{(int)character:X4}"));
+        var candidate = $"{baseName}__{stableSuffix}";
+        var collisionIndex = 2;
+        while (assigned.Contains(candidate))
+        {
+            candidate = $"{baseName}__{stableSuffix}_{collisionIndex}";
+            collisionIndex++;
+        }
+
+        return candidate;
+    }
+
     private sealed record ActorProjectionNodes(
         Node3D ActorRoot,
         Label3D ActionLabel,
         Label3D LockBadge,
         MeshInstance3D LockLine,
         ImmediateMesh LockLineMesh);
+
+    private sealed class ActorTrajectoryProjectionNodes(
+        Node3D container,
+        TrajectoryMeshProjectionNodes sharedPath,
+        TrajectoryMeshProjectionNodes freeFacingTicks,
+        TrajectoryMeshProjectionNodes lockOnFacingTicks)
+    {
+        public Node3D Container { get; } = container;
+
+        public TrajectoryMeshProjectionNodes SharedPath { get; } = sharedPath;
+
+        public TrajectoryMeshProjectionNodes FreeFacingTicks { get; } = freeFacingTicks;
+
+        public TrajectoryMeshProjectionNodes LockOnFacingTicks { get; } = lockOnFacingTicks;
+
+        public WorldTrajectoryGeometry? Geometry { get; set; }
+    }
+
+    private sealed record TrajectoryMeshProjectionNodes(
+        MeshInstance3D Instance,
+        ImmediateMesh Mesh,
+        ShaderMaterial Material);
 }

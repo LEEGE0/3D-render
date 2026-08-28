@@ -1,3 +1,4 @@
+using PvpGuide.Application.Projection;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Timeline;
 using PvpGuide.Editor.Features.ViewportSync;
@@ -7,6 +8,69 @@ namespace PvpGuide.Editor.Tests;
 
 public sealed class WorldTrajectoryGeometryTests
 {
+    [Fact]
+    public void Render_state_exposes_geometry_key_actor_mesh_payloads_and_normalized_current_time()
+    {
+        var trajectory = CreateTrajectory(
+            Sample(0, new Position3(1, 2, 3), 0, 90),
+            Sample(1, new Position3(5, 6, 7), 180, 270));
+        var frame = CreateFrame(CreateSet(revision: 8, motionRevision: 7, trajectory), timeSeconds: 0.25);
+
+        var state = WorldTrajectoryRenderState.Create(frame, previous: null);
+
+        Assert.Equal(new WorldTrajectoryGeometryKey(7, "world-render-policy"), state.GeometryKey);
+        Assert.Equal(0.25, state.CurrentTimeNormalized);
+        var actor = state.ActorGeometries["host"];
+        Assert.Equal(
+            [
+                new WorldPosition(1, 2 + WorldTrajectoryGeometry.TrajectoryLiftY, 3),
+                new WorldPosition(5, 6 + WorldTrajectoryGeometry.TrajectoryLiftY, 7),
+            ],
+            actor.SharedPath.Vertices);
+        Assert.Equal([0, 1], actor.SharedPath.NormalizedTimes);
+        Assert.Equal(4, actor.FreeFacingTicks.Vertices.Count);
+        Assert.Equal([0, 0, 1, 1], actor.FreeFacingTicks.NormalizedTimes);
+        Assert.Equal(4, actor.LockOnFacingTicks.Vertices.Count);
+        Assert.Equal([0, 0, 1, 1], actor.LockOnFacingTicks.NormalizedTimes);
+    }
+
+    [Fact]
+    public void Render_state_reuses_actor_geometry_for_the_same_motion_key_and_rebuilds_for_a_new_key()
+    {
+        var initialSet = CreateSet(
+            revision: 4,
+            motionRevision: 4,
+            CreateTrajectory(
+                Sample(0, new Position3(0, 0, 0), 0, 90),
+                Sample(1, new Position3(1, 0, 0), 90, 180)));
+        var initial = WorldTrajectoryRenderState.Create(
+            CreateFrame(initialSet, timeSeconds: 0.25),
+            previous: null);
+        var afterSeek = WorldTrajectoryRenderState.Create(
+            CreateFrame(initialSet, timeSeconds: 0.75),
+            initial);
+        var actionOnly = WorldTrajectoryRenderState.Create(
+            CreateFrame(initialSet.WithRevision(5), timeSeconds: 0.75),
+            afterSeek);
+        var changed = WorldTrajectoryRenderState.Create(
+            CreateFrame(
+                CreateSet(
+                    revision: 6,
+                    motionRevision: 6,
+                    CreateTrajectory(
+                        Sample(0, new Position3(0, 0, 0), 0, 90),
+                        Sample(1, new Position3(2, 0, 0), 90, 180))),
+                timeSeconds: 0.75),
+            actionOnly);
+
+        Assert.Same(initial.ActorGeometries, afterSeek.ActorGeometries);
+        Assert.Same(afterSeek.ActorGeometries, actionOnly.ActorGeometries);
+        Assert.Same(initial.ActorGeometries["host"], actionOnly.ActorGeometries["host"]);
+        Assert.NotSame(actionOnly.ActorGeometries, changed.ActorGeometries);
+        Assert.NotSame(actionOnly.ActorGeometries["host"], changed.ActorGeometries["host"]);
+        Assert.Equal(0.75, afterSeek.CurrentTimeNormalized);
+    }
+
     [Fact]
     public void Path_vertices_preserve_world_x_z_and_add_the_same_positive_y_lift()
     {
@@ -126,6 +190,43 @@ public sealed class WorldTrajectoryGeometryTests
 
     private static ActorMovementTrajectory CreateTrajectory(params MovementTrajectorySample[] samples) =>
         new("host", samples, segmentSteps: 0);
+
+    private static MovementTrajectorySet CreateSet(
+        long revision,
+        long motionRevision,
+        ActorMovementTrajectory trajectory) =>
+        new(
+            "world-render",
+            revision,
+            motionRevision,
+            "world-render-policy",
+            uniformRate: 5,
+            new Dictionary<string, ActorMovementTrajectory>(StringComparer.Ordinal)
+            {
+                [trajectory.ActorId] = trajectory,
+            },
+            segmentSteps: 0);
+
+    private static SceneProjectionFrame CreateFrame(
+        MovementTrajectorySet trajectories,
+        double timeSeconds)
+    {
+        var snapshot = new SceneSnapshot(
+            trajectories.DocumentId,
+            trajectories.Revision,
+            timeSeconds,
+            new Dictionary<string, EvaluatedTransform>(StringComparer.Ordinal)
+            {
+                ["host"] = new(new Position3(0, 0, 0), 15),
+            },
+            new Dictionary<string, EvaluatedActorTimelineState>(StringComparer.Ordinal),
+            new Dictionary<string, EvaluatedActorFacing>(StringComparer.Ordinal)
+            {
+                ["host"] = new(90, FacingResolutionKind.ContinuousTarget, "lock"),
+            },
+            trajectories.MotionRevision);
+        return new SceneProjectionFrame(snapshot, trajectories, trajectories.SamplingPolicyFingerprint);
+    }
 
     private static MovementTrajectorySample Sample(
         double timeSeconds,
