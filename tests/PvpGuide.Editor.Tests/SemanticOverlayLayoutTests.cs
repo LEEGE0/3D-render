@@ -16,7 +16,8 @@ public sealed class SemanticOverlayLayoutTests
             actionKey: "attack",
             lockEnabled: true,
             targetActorId: "invader",
-            trackingMode: LockOnTrackingMode.Continuous);
+            trackingMode: LockOnTrackingMode.Continuous,
+            targetState: LockTargetDisplayState.Available);
 
         Assert.Equal("행동: attack", overlay.ActionLabel);
         Assert.Equal("LOCK · invader · CONT", overlay.LockBadge);
@@ -35,7 +36,8 @@ public sealed class SemanticOverlayLayoutTests
             actionKey: null,
             lockEnabled: false,
             targetActorId: "invader",
-            trackingMode: LockOnTrackingMode.KeyframeOnly);
+            trackingMode: LockOnTrackingMode.KeyframeOnly,
+            targetState: LockTargetDisplayState.NotApplicable);
 
         Assert.Null(overlay.ActionLabel);
         Assert.Null(overlay.LockBadge);
@@ -52,9 +54,25 @@ public sealed class SemanticOverlayLayoutTests
             actionKey: "attack",
             lockEnabled: true,
             targetActorId: "missing",
-            trackingMode: LockOnTrackingMode.Snap));
+            trackingMode: LockOnTrackingMode.Snap,
+            targetState: LockTargetDisplayState.Available));
 
         Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Missing_target_fallback_state_rejects_a_target_position()
+    {
+        var exception = Assert.Throws<InvalidOperationException>(() => SemanticOverlayLayout.Create(
+            actorPosition: new Position3(1, 0, 2),
+            targetPosition: new Position3(4, 0, -1),
+            actionKey: "attack",
+            lockEnabled: true,
+            targetActorId: "invader",
+            trackingMode: LockOnTrackingMode.Snap,
+            targetState: LockTargetDisplayState.MissingTargetFallback));
+
+        Assert.Contains("fallback", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -94,6 +112,53 @@ public sealed class SemanticOverlayLayoutTests
             () => SemanticOverlayLayout.CreateScene(snapshot));
 
         Assert.Contains("missing", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Scene_layout_shows_missing_target_fallback_without_hiding_other_semantics()
+    {
+        var snapshot = new SceneSnapshot(
+            "semantic-layout",
+            revision: 3,
+            timeSeconds: 1.5,
+            new Dictionary<string, EvaluatedTransform>(StringComparer.Ordinal)
+            {
+                ["host"] = new(new Position3(1, 0, 2), 30),
+                ["spectator"] = new(new Position3(8, 0, 6), 180),
+            },
+            new Dictionary<string, EvaluatedActorTimelineState>(StringComparer.Ordinal)
+            {
+                ["host"] = new(
+                    new EvaluatedActionState("action-host", "attack"),
+                    new EvaluatedLockOnState(
+                        "lock-host",
+                        true,
+                        "missing-target",
+                        0,
+                        LockOnTrackingMode.Continuous)),
+                ["spectator"] = new(
+                    new EvaluatedActionState("action-spectator", "roll"),
+                    new EvaluatedLockOnState(
+                        null,
+                        false,
+                        null,
+                        0,
+                        LockOnTrackingMode.Continuous)),
+            },
+            new Dictionary<string, EvaluatedActorFacing>(StringComparer.Ordinal)
+            {
+                ["host"] = new(30, FacingResolutionKind.TargetUnavailableFallback, "lock-host"),
+                ["spectator"] = new(180, FacingResolutionKind.AuthoredDisabled, null),
+            });
+
+        var overlays = SemanticOverlayLayout.CreateScene(snapshot);
+
+        Assert.Equal("행동: attack", overlays["host"].ActionLabel);
+        Assert.Equal("LOCK · missing-target · 대상 없음", overlays["host"].LockBadge);
+        Assert.Null(overlays["host"].LockLine);
+        Assert.Null(overlays["host"].TargetMarkerPosition);
+        Assert.Equal("행동: roll", overlays["spectator"].ActionLabel);
+        Assert.Null(overlays["spectator"].LockBadge);
     }
 
     private static SceneSnapshot CreateSnapshot(

@@ -12,6 +12,13 @@ public sealed record SemanticActorOverlay(
     SemanticOverlayLine? LockLine,
     Position3? TargetMarkerPosition);
 
+public enum LockTargetDisplayState
+{
+    NotApplicable,
+    Available,
+    MissingTargetFallback,
+}
+
 public static class SemanticOverlayLayout
 {
     public static SemanticActorOverlay Create(
@@ -20,25 +27,26 @@ public static class SemanticOverlayLayout
         string? actionKey,
         bool lockEnabled,
         string? targetActorId,
-        LockOnTrackingMode trackingMode)
+        LockOnTrackingMode trackingMode,
+        LockTargetDisplayState targetState)
     {
         var actionLabel = string.IsNullOrWhiteSpace(actionKey)
             ? null
             : $"행동: {actionKey}";
         if (!lockEnabled)
         {
+            if (targetState != LockTargetDisplayState.NotApplicable)
+            {
+                throw new InvalidOperationException(
+                    "Disabled lock-on requires a not-applicable target display state.");
+            }
+
             return new SemanticActorOverlay(actionLabel, null, null, null);
         }
 
         if (string.IsNullOrWhiteSpace(targetActorId))
         {
             throw new InvalidOperationException("Enabled lock-on requires a target actor ID.");
-        }
-
-        if (targetPosition is null)
-        {
-            throw new InvalidOperationException(
-                $"Enabled lock-on target '{targetActorId}' is missing from actor transforms.");
         }
 
         var mode = trackingMode switch
@@ -48,11 +56,29 @@ public static class SemanticOverlayLayout
             LockOnTrackingMode.KeyframeOnly => "KEY",
             _ => trackingMode.ToString().ToUpperInvariant(),
         };
-        return new SemanticActorOverlay(
-            actionLabel,
-            $"LOCK · {targetActorId} · {mode}",
-            new SemanticOverlayLine(actorPosition, targetPosition.Value),
-            targetPosition.Value);
+
+        return targetState switch
+        {
+            LockTargetDisplayState.Available when targetPosition is { } position =>
+                new SemanticActorOverlay(
+                    actionLabel,
+                    $"LOCK · {targetActorId} · {mode}",
+                    new SemanticOverlayLine(actorPosition, position),
+                    position),
+            LockTargetDisplayState.Available => throw new InvalidOperationException(
+                $"Enabled lock-on target '{targetActorId}' is missing from actor transforms."),
+            LockTargetDisplayState.MissingTargetFallback when targetPosition is null =>
+                new SemanticActorOverlay(
+                    actionLabel,
+                    $"LOCK · {targetActorId} · 대상 없음",
+                    null,
+                    null),
+            LockTargetDisplayState.MissingTargetFallback => throw new InvalidOperationException(
+                $"Missing-target fallback for '{targetActorId}' cannot include a target position."),
+            LockTargetDisplayState.NotApplicable => throw new InvalidOperationException(
+                "Enabled lock-on requires an explicit target display state."),
+            _ => throw new ArgumentOutOfRangeException(nameof(targetState), targetState, null),
+        };
     }
 
     public static IReadOnlyDictionary<string, SemanticActorOverlay> CreateScene(
@@ -69,10 +95,21 @@ public static class SemanticOverlayLayout
             snapshot.ActorTimelineStates.TryGetValue(actorId, out var state);
             var actorPosition = GetDisplayedPosition(actorId, transform.Position, displayedPositions);
             Position3? targetPosition = null;
+            var targetState = LockTargetDisplayState.NotApplicable;
             if (state?.LockOn is { Enabled: true, TargetActorId: { } targetActorId } &&
                 snapshot.ActorTransforms.TryGetValue(targetActorId, out var targetTransform))
             {
                 targetPosition = GetDisplayedPosition(targetActorId, targetTransform.Position, displayedPositions);
+                targetState = LockTargetDisplayState.Available;
+            }
+            else if (state?.LockOn is { Enabled: true, TargetActorId: { } missingTargetActorId })
+            {
+                targetState = snapshot.ActorFacings.TryGetValue(actorId, out var facing) &&
+                    facing.ResolutionKind == FacingResolutionKind.TargetUnavailableFallback
+                        ? LockTargetDisplayState.MissingTargetFallback
+                        : throw new InvalidOperationException(
+                            $"Enabled lock-on target '{missingTargetActorId}' is missing from actor transforms " +
+                            "without target-unavailable facing provenance.");
             }
 
             overlays.Add(actorId, Create(
@@ -81,7 +118,8 @@ public static class SemanticOverlayLayout
                 state?.Action.ActionKey,
                 state?.LockOn.Enabled ?? false,
                 state?.LockOn.TargetActorId,
-                state?.LockOn.TrackingMode ?? LockOnTrackingMode.Continuous));
+                state?.LockOn.TrackingMode ?? LockOnTrackingMode.Continuous,
+                targetState));
         }
 
         return new ReadOnlyDictionary<string, SemanticActorOverlay>(overlays);
