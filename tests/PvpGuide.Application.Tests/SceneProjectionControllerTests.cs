@@ -128,6 +128,33 @@ public sealed class SceneProjectionControllerTests
         Assert.Equal(1, source.CreateTrajectoriesCalls);
     }
 
+    [Theory]
+    [InlineData(60, 3)]
+    [InlineData(3, 60)]
+    public void Metadata_change_during_plan_creation_retries_with_the_new_canonical_rate(
+        int initialFramesPerSecond,
+        int changedFramesPerSecond)
+    {
+        var source = new ControllableProjectionSource(framesPerSecond: initialFramesPerSecond);
+        source.BeforeNextPlanReturn = () => source.SetMetadataSilently(
+            revision: 1,
+            motionRevision: 1,
+            framesPerSecond: changedFramesPerSecond);
+        var top = new RecordingConsumer();
+        var world = new RecordingConsumer();
+        using var controller = new SceneProjectionController(source, new PlaybackClock(2, 30), top, world);
+
+        controller.ProjectCurrent();
+
+        var frame = Assert.Single(top.Received);
+        Assert.Same(frame, Assert.Single(world.Received));
+        Assert.Equal(1, frame.Snapshot.Revision);
+        Assert.Equal(1, frame.Snapshot.MotionRevision);
+        Assert.Equal(2, source.CreateTrajectorySamplePlanCalls);
+        Assert.Equal(1, source.CreateTrajectoriesCalls);
+        Assert.Equal(1, source.CreateSnapshotCalls);
+    }
+
     [Fact]
     public void Action_only_revision_wraps_the_cached_set_and_reuses_actor_geometry()
     {
@@ -366,6 +393,7 @@ public sealed class SceneProjectionControllerTests
     {
         private long _revision;
         private long _motionRevision;
+        private int _framesPerSecond;
 
         public ControllableProjectionSource(
             long revision = 0,
@@ -376,18 +404,18 @@ public sealed class SceneProjectionControllerTests
             _revision = revision;
             _motionRevision = motionRevision;
             DurationSeconds = durationSeconds;
-            FramesPerSecond = framesPerSecond;
+            _framesPerSecond = framesPerSecond;
         }
 
         public event EventHandler<SceneDocumentChangedEventArgs>? Changed;
 
         public double DurationSeconds { get; }
 
-        public int FramesPerSecond { get; }
-
         public int CreateSnapshotCalls { get; private set; }
 
         public int CreateTrajectoriesCalls { get; private set; }
+
+        public int CreateTrajectorySamplePlanCalls { get; private set; }
 
         public TrajectorySamplingSettings? LastSettings { get; private set; }
 
@@ -395,10 +423,12 @@ public sealed class SceneProjectionControllerTests
 
         public Action? BeforeNextSnapshot { get; set; }
 
+        public Action? BeforeNextPlanReturn { get; set; }
+
         public bool ChangeMetadataBeforeEverySnapshot { get; init; }
 
         public ProjectionSourceMetadata GetProjectionMetadata() =>
-            new("source", DurationSeconds, FramesPerSecond, _revision, _motionRevision);
+            new("source", DurationSeconds, _framesPerSecond, _revision, _motionRevision);
 
         public SceneSnapshot CreateSnapshot(double timeSeconds)
         {
@@ -424,8 +454,12 @@ public sealed class SceneProjectionControllerTests
 
         public TrajectorySamplePlan CreateTrajectorySamplePlan(TrajectorySamplingSettings settings)
         {
+            CreateTrajectorySamplePlanCalls++;
             LastSettings = settings;
-            var rate = ReturnedUniformRate ?? Math.Min(FramesPerSecond, settings.MaximumUniformRate);
+            var callback = BeforeNextPlanReturn;
+            BeforeNextPlanReturn = null;
+            callback?.Invoke();
+            var rate = ReturnedUniformRate ?? Math.Min(_framesPerSecond, settings.MaximumUniformRate);
             return new TrajectorySamplePlan(settings.PolicyVersion, rate, [0, DurationSeconds]);
         }
 
@@ -445,6 +479,12 @@ public sealed class SceneProjectionControllerTests
         {
             _revision = revision;
             _motionRevision = motionRevision;
+        }
+
+        public void SetMetadataSilently(long revision, long motionRevision, int framesPerSecond)
+        {
+            SetMetadataSilently(revision, motionRevision);
+            _framesPerSecond = framesPerSecond;
         }
     }
 

@@ -139,7 +139,15 @@ public sealed class SceneProjectionController : IDisposable
         var metadata = firstMetadata;
         for (var attempt = 0; attempt < MaximumConsistencyAttempts; attempt++)
         {
-            var evaluation = EvaluateProjection(timeSeconds, metadata);
+            var plan = _source.CreateTrajectorySamplePlan(_samplingSettings);
+            var metadataAfterPlan = _source.GetProjectionMetadata();
+            if (metadata != metadataAfterPlan)
+            {
+                metadata = metadataAfterPlan;
+                continue;
+            }
+
+            var evaluation = EvaluateProjection(timeSeconds, metadata, plan);
             var finalMetadata = _source.GetProjectionMetadata();
             if (metadata == finalMetadata)
             {
@@ -160,7 +168,8 @@ public sealed class SceneProjectionController : IDisposable
 
     private ProjectionEvaluation EvaluateProjection(
         double timeSeconds,
-        ProjectionSourceMetadata metadata)
+        ProjectionSourceMetadata metadata,
+        TrajectorySamplePlan plan)
     {
         if (!double.IsFinite(timeSeconds) || timeSeconds < 0 || timeSeconds > metadata.DurationSeconds)
         {
@@ -169,7 +178,6 @@ public sealed class SceneProjectionController : IDisposable
                 "Playback time must be finite and within the projection source duration.");
         }
 
-        var plan = _source.CreateTrajectorySamplePlan(_samplingSettings);
         TrajectorySamplingPolicy.ValidatePlan(plan, metadata);
         var trajectories = GetTrajectories(metadata, plan);
         var snapshot = _source.CreateSnapshot(timeSeconds);
