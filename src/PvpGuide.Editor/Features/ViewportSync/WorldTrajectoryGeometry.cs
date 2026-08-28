@@ -1,5 +1,6 @@
 using System.Collections.ObjectModel;
 using PvpGuide.Domain.Timeline;
+using PvpGuide.Editor.Features.Trajectory;
 
 namespace PvpGuide.Editor.Features.ViewportSync;
 
@@ -96,7 +97,7 @@ public sealed class WorldTrajectoryGeometry
     public static WorldTrajectoryGeometry Create(
         ActorMovementTrajectory trajectory,
         double durationSeconds,
-        IEnumerable<int> tickSampleIndices)
+        int? uniformRate)
     {
         ArgumentNullException.ThrowIfNull(trajectory);
         if (!double.IsFinite(durationSeconds) || durationSeconds < 0)
@@ -106,8 +107,19 @@ public sealed class WorldTrajectoryGeometry
                 "Trajectory duration must be finite and non-negative.");
         }
 
-        ArgumentNullException.ThrowIfNull(tickSampleIndices);
-        var copiedTickIndices = tickSampleIndices.ToArray();
+        foreach (var sample in trajectory.Samples)
+        {
+            if (sample.TimeSeconds > durationSeconds)
+            {
+                throw new ArgumentException(
+                    "Trajectory sample times cannot exceed the document duration.",
+                    nameof(trajectory));
+            }
+        }
+
+        var copiedTickIndices = TrajectoryTickSelectionPolicy
+            .SelectOrderedSampleIndices(trajectory, uniformRate)
+            .ToArray();
         ValidateTickSampleIndices(copiedTickIndices, trajectory.Samples.Count);
 
         var pathVertices = new WorldPosition[trajectory.Samples.Count];

@@ -100,6 +100,7 @@ internal static class MovementTrajectoryEvaluator
             revision,
             motionRevision,
             plan.Fingerprint,
+            plan.UniformRate,
             actorTrajectories,
             totalSegmentSteps);
     }

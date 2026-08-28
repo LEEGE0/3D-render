@@ -2,6 +2,7 @@ using PvpGuide.Application.Editing;
 using PvpGuide.Application.Projection;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Timeline;
+using PvpGuide.Editor.Features.Trajectory;
 using PvpGuide.Editor.Features.TopView;
 using Xunit;
 
@@ -26,35 +27,83 @@ public sealed class TrajectoryOverlayLayoutTests
     }
 
     [Fact]
-    public void Tick_selection_uses_five_hertz_nearest_samples_ties_earlier_and_always_keeps_anchors()
+    public void Four_hertz_uniform_samples_and_many_anchors_are_all_preserved()
     {
         var geometry = TrajectoryOverlayLayout.CreateGeometry(CreateSet(
-            Sample(0.00, anchor: TrajectoryAnchorKind.None),
-            Sample(0.05, anchor: TrajectoryAnchorKind.None),
-            Sample(0.10, anchor: TrajectoryAnchorKind.None),
-            Sample(0.30, anchor: TrajectoryAnchorKind.None),
-            Sample(0.35, anchor: TrajectoryAnchorKind.ActorLockOn),
-            Sample(0.40, anchor: TrajectoryAnchorKind.None)));
+            uniformRate: 4,
+            Sample(0.00),
+            Sample(0.20, anchor: TrajectoryAnchorKind.ActorLockOn),
+            Sample(0.25),
+            Sample(0.40, anchor: TrajectoryAnchorKind.ActorTransform),
+            Sample(0.50),
+            Sample(0.60, anchor: TrajectoryAnchorKind.ActiveTargetTransform),
+            Sample(0.75),
+            Sample(0.80, anchor: TrajectoryAnchorKind.ActorLockOn),
+            Sample(1.00)));
 
         var actor = geometry.Actors["host"];
 
-        Assert.Equal([0.00, 0.10, 0.35, 0.40], actor.FreeFacingTicks.Select(tick => tick.TimeSeconds));
-        Assert.Equal([0.00, 0.10, 0.35, 0.40], actor.LockOnFacingTicks.Select(tick => tick.TimeSeconds));
+        Assert.Equal(
+            [0.00, 0.20, 0.25, 0.40, 0.50, 0.60, 0.75, 0.80, 1.00],
+            actor.FreeFacingTicks.Select(tick => tick.TimeSeconds));
     }
 
     [Fact]
-    public void Tick_selection_keeps_every_sample_when_source_rate_is_below_five_hertz()
+    public void Below_five_hertz_keeps_a_non_grid_duration_boundary_sample()
     {
         var geometry = TrajectoryOverlayLayout.CreateGeometry(CreateSet(
-            Sample(0.00),
+            uniformRate: 4,
+            Sample(0),
             Sample(0.25),
             Sample(0.50),
             Sample(0.75),
-            Sample(1.00)));
+            Sample(0.90)));
 
         Assert.Equal(
-            [0.00, 0.25, 0.50, 0.75, 1.00],
+            [0, 0.25, 0.50, 0.75, 0.90],
             geometry.Actors["host"].FreeFacingTicks.Select(tick => tick.TimeSeconds));
+    }
+
+    [Fact]
+    public void Six_hertz_nearest_uses_uniform_candidate_while_nearby_anchor_is_union_only()
+    {
+        var oneSixth = 1d / 6;
+        var geometry = TrajectoryOverlayLayout.CreateGeometry(CreateSet(
+            uniformRate: 6,
+            Sample(0),
+            Sample(oneSixth),
+            Sample(0.19, anchor: TrajectoryAnchorKind.ActorLockOn),
+            Sample(2d / 6)));
+
+        Assert.Equal(
+            [0, oneSixth, 0.19],
+            geometry.Actors["host"].FreeFacingTicks.Select(tick => tick.TimeSeconds));
+    }
+
+    [Fact]
+    public void Nearest_uniform_candidate_uses_earlier_only_for_an_exact_tie()
+    {
+        var samples = new[] { Sample(0.125), Sample(0.375) };
+
+        var selected = TrajectoryTickSelectionPolicy.SelectNearestSampleIndex(
+            samples,
+            candidateIndices: [0, 1],
+            requestedTimeSeconds: 0.25);
+
+        Assert.Equal(0, selected);
+    }
+
+    [Fact]
+    public void Nearest_uniform_candidate_accepts_a_later_sample_that_is_five_e_minus_thirteen_closer()
+    {
+        var samples = new[] { Sample(0.125), Sample(0.375 - 5e-13) };
+
+        var selected = TrajectoryTickSelectionPolicy.SelectNearestSampleIndex(
+            samples,
+            candidateIndices: [0, 1],
+            requestedTimeSeconds: 0.25);
+
+        Assert.Equal(1, selected);
     }
 
     [Fact]
@@ -96,10 +145,10 @@ public sealed class TrajectoryOverlayLayoutTests
     }
 
     [Fact]
-    public void Free_and_lock_ticks_share_exact_positions_and_only_their_yaw_differs()
+    public void Same_yaw_ticks_share_position_but_keep_distinct_endpoint_shapes()
     {
         var geometry = TrajectoryOverlayLayout.CreateGeometry(CreateSet(
-            Sample(0, x: 3, z: -2, freeYaw: 15, lockYaw: 80)));
+            Sample(0, x: 3, z: -2, freeYaw: 45, lockYaw: 45)));
 
         var actor = geometry.Actors["host"];
         var free = Assert.Single(actor.FreeFacingTicks);
@@ -107,8 +156,10 @@ public sealed class TrajectoryOverlayLayoutTests
 
         Assert.Equal(new Position3(3, 0, -2), free.Position);
         Assert.Equal(free.Position, locked.Position);
-        Assert.Equal(15, free.YawDegrees);
-        Assert.Equal(80, locked.YawDegrees);
+        Assert.Equal(45, free.YawDegrees);
+        Assert.Equal(free.YawDegrees, locked.YawDegrees);
+        Assert.Equal(TopViewTickEndpointShape.FreeArrow, free.EndpointShape);
+        Assert.Equal(TopViewTickEndpointShape.LockOnBar, locked.EndpointShape);
     }
 
     [Fact]
@@ -225,7 +276,12 @@ public sealed class TrajectoryOverlayLayoutTests
         return new SceneProjectionFrame(snapshot, set, set.SamplingPolicyFingerprint);
     }
 
-    private static MovementTrajectorySet CreateSet(params MovementTrajectorySample[] samples)
+    private static MovementTrajectorySet CreateSet(params MovementTrajectorySample[] samples) =>
+        CreateSet(uniformRate: 30, samples);
+
+    private static MovementTrajectorySet CreateSet(
+        int uniformRate,
+        params MovementTrajectorySample[] samples)
     {
         var actor = new ActorMovementTrajectory("host", samples, segmentSteps: samples.Length);
         return new MovementTrajectorySet(
@@ -233,6 +289,7 @@ public sealed class TrajectoryOverlayLayoutTests
             revision: 2,
             motionRevision: 2,
             samplingPolicyFingerprint: "top-view-policy",
+            uniformRate,
             new Dictionary<string, ActorMovementTrajectory>(StringComparer.Ordinal)
             {
                 ["host"] = actor,

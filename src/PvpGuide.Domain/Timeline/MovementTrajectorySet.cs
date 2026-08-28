@@ -16,6 +16,26 @@ public sealed class MovementTrajectorySet
             revision,
             motionRevision,
             samplingPolicyFingerprint,
+            uniformRate: null,
+            CopyActors(actors),
+            segmentSteps)
+    {
+    }
+
+    public MovementTrajectorySet(
+        string documentId,
+        long revision,
+        long motionRevision,
+        string samplingPolicyFingerprint,
+        int uniformRate,
+        IReadOnlyDictionary<string, ActorMovementTrajectory> actors,
+        long segmentSteps)
+        : this(
+            documentId,
+            revision,
+            motionRevision,
+            samplingPolicyFingerprint,
+            uniformRate: (int?)uniformRate,
             CopyActors(actors),
             segmentSteps)
     {
@@ -26,6 +46,7 @@ public sealed class MovementTrajectorySet
         long revision,
         long motionRevision,
         string samplingPolicyFingerprint,
+        int? uniformRate,
         ReadOnlyDictionary<string, ActorMovementTrajectory> actors,
         long segmentSteps)
     {
@@ -43,6 +64,11 @@ public sealed class MovementTrajectorySet
         }
 
         ArgumentException.ThrowIfNullOrWhiteSpace(samplingPolicyFingerprint);
+        if (uniformRate is <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(uniformRate), "Uniform rate must be positive when present.");
+        }
+
         if (segmentSteps < 0)
         {
             throw new ArgumentOutOfRangeException(nameof(segmentSteps), "Segment step count cannot be negative.");
@@ -52,6 +78,7 @@ public sealed class MovementTrajectorySet
         Revision = revision;
         MotionRevision = motionRevision;
         SamplingPolicyFingerprint = samplingPolicyFingerprint;
+        UniformRate = uniformRate;
         Actors = actors;
         SegmentSteps = segmentSteps;
     }
@@ -63,6 +90,8 @@ public sealed class MovementTrajectorySet
     public long MotionRevision { get; }
 
     public string SamplingPolicyFingerprint { get; }
+
+    public int? UniformRate { get; }
 
     public IReadOnlyDictionary<string, ActorMovementTrajectory> Actors { get; }
 
@@ -84,6 +113,7 @@ public sealed class MovementTrajectorySet
                 revision,
                 MotionRevision,
                 SamplingPolicyFingerprint,
+                UniformRate,
                 (ReadOnlyDictionary<string, ActorMovementTrajectory>)Actors,
                 SegmentSteps);
     }

@@ -14,7 +14,7 @@ public sealed class WorldTrajectoryGeometryTests
             Sample(0, new Position3(1.25, -2.5, 3.75), 0, 90),
             Sample(2, new Position3(-4.5, 6.25, 8.75), 180, 270));
 
-        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 4, tickSampleIndices: []);
+        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 4, uniformRate: 30);
 
         Assert.True(WorldTrajectoryGeometry.TrajectoryLiftY > 0);
         Assert.Equal(
@@ -32,7 +32,7 @@ public sealed class WorldTrajectoryGeometryTests
         var source = new Position3(2, 3, 4);
         var trajectory = CreateTrajectory(Sample(1, source, freeYawDegrees: 0, lockYawDegrees: 90));
 
-        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 2, tickSampleIndices: [0]);
+        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 2, uniformRate: 30);
         var liftedSource = new WorldPosition(2, 3 + WorldTrajectoryGeometry.TrajectoryLiftY, 4);
 
         Assert.Equal(liftedSource, geometry.FreeFacingTicks.Vertices[0]);
@@ -48,14 +48,14 @@ public sealed class WorldTrajectoryGeometryTests
     }
 
     [Fact]
-    public void Tick_geometry_uses_only_the_sample_indices_selected_by_the_caller()
+    public void Tick_geometry_uses_the_exact_indices_selected_by_the_shared_policy()
     {
         var trajectory = CreateTrajectory(
             Sample(0, new Position3(0, 0, 0), 0, 0),
             Sample(0.1, new Position3(1, 0, 0), 0, 0),
             Sample(0.2, new Position3(2, 0, 0), 0, 0));
 
-        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 0.2, tickSampleIndices: [0, 2]);
+        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 0.2, uniformRate: 10);
 
         Assert.Equal(3, geometry.SharedPath.Vertices.Count);
         Assert.Equal(4, geometry.FreeFacingTicks.Vertices.Count);
@@ -68,7 +68,7 @@ public sealed class WorldTrajectoryGeometryTests
     {
         var trajectory = CreateTrajectory(Sample(0, new Position3(0, 0, 0), 45, 135));
 
-        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 0, tickSampleIndices: [0]);
+        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 0, uniformRate: 30);
 
         Assert.Equal([0], geometry.SharedPath.NormalizedTimes);
         Assert.Equal([0, 0], geometry.FreeFacingTicks.NormalizedTimes);
@@ -76,15 +76,12 @@ public sealed class WorldTrajectoryGeometryTests
     }
 
     [Fact]
-    public void Geometry_collections_are_read_only_and_defensively_copy_selected_indices()
+    public void Geometry_collections_are_read_only()
     {
         var trajectory = CreateTrajectory(
             Sample(0, new Position3(0, 0, 0), 0, 0),
             Sample(1, new Position3(1, 0, 0), 90, 90));
-        var selectedIndices = new List<int> { 0 };
-
-        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 1, selectedIndices);
-        selectedIndices[0] = 1;
+        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 1, uniformRate: 30);
 
         Assert.Equal(0, geometry.FreeFacingTicks.Vertices[0].X);
         Assert.Throws<NotSupportedException>(() =>
@@ -94,12 +91,30 @@ public sealed class WorldTrajectoryGeometryTests
     }
 
     [Fact]
+    public void Zero_duration_rejects_a_sample_later_than_zero_instead_of_collapsing_its_uv()
+    {
+        var trajectory = CreateTrajectory(Sample(0.01, new Position3(0, 0, 0), 0, 0));
+
+        Assert.Throws<ArgumentException>(() =>
+            WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 0, uniformRate: 30));
+    }
+
+    [Fact]
+    public void Positive_duration_rejects_a_sample_later_than_the_duration()
+    {
+        var trajectory = CreateTrajectory(Sample(1.01, new Position3(0, 0, 0), 0, 0));
+
+        Assert.Throws<ArgumentException>(() =>
+            WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 1, uniformRate: 30));
+    }
+
+    [Fact]
     public void Geometry_is_reusable_when_only_current_time_changes()
     {
         var trajectory = CreateTrajectory(
             Sample(0, new Position3(0, 0, 0), 0, 90),
             Sample(1, new Position3(1, 0, 0), 90, 180));
-        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 1, tickSampleIndices: [0, 1]);
+        var geometry = WorldTrajectoryGeometry.Create(trajectory, durationSeconds: 1, uniformRate: 30);
 
         var beforeSeek = new WorldTrajectoryPresentation(geometry, currentTimeNormalized: 0.25);
         var afterSeek = new WorldTrajectoryPresentation(geometry, currentTimeNormalized: 0.75);

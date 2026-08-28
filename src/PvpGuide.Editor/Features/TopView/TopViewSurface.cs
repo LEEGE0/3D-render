@@ -212,6 +212,7 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
                 var end = ToVector2(mapper.RotationHandlePosition(centerPoint, tick.YawDegrees, length));
                 var color = WithBrightness(baseColor, tick.Brightness * actor.SelectionBrightness);
                 DrawLine(center, end, color, width, true);
+                DrawTickEndpoint(center, end, tick.EndpointShape, color);
 
                 if (!lockOn && (tick.AnchorMarker & TopViewAnchorMarker.TransformCircle) != 0)
                 {
@@ -719,6 +720,29 @@ public partial class TopViewSurface : Control, ISceneProjectionConsumer, ITransf
         DrawLine(right, bottom, color, 2, true);
         DrawLine(bottom, left, color, 2, true);
         DrawLine(left, top, color, 2, true);
+    }
+
+    private void DrawTickEndpoint(
+        Vector2 start,
+        Vector2 end,
+        TopViewTickEndpointShape endpointShape,
+        Color color)
+    {
+        var direction = (end - start).Normalized();
+        var perpendicular = new Vector2(-direction.Y, direction.X);
+        switch (endpointShape)
+        {
+            case TopViewTickEndpointShape.FreeArrow:
+                var arrowBase = end - (direction * 4);
+                DrawLine(end, arrowBase + (perpendicular * 3), color, 2, true);
+                DrawLine(end, arrowBase - (perpendicular * 3), color, 2, true);
+                break;
+            case TopViewTickEndpointShape.LockOnBar:
+                DrawLine(end - (perpendicular * 4), end + (perpendicular * 4), color, 3, true);
+                break;
+            default:
+                throw new InvalidOperationException($"Unsupported tick endpoint shape: {endpointShape}.");
+        }
     }
 
     private static Color WithBrightness(Color color, double brightness)

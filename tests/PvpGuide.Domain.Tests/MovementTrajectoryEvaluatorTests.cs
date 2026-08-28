@@ -264,6 +264,7 @@ public sealed class MovementTrajectoryEvaluatorTests
         var set = new MovementTrajectorySet("document", 2, 1, plan.Fingerprint, sourceActors, 1);
         sourceActors.Clear();
         Assert.Single(set.Actors);
+        Assert.Null(set.UniformRate);
         Assert.Throws<NotSupportedException>(() => ((IDictionary<string, ActorMovementTrajectory>)set.Actors).Clear());
 
         Assert.Throws<ArgumentException>(() => new ActorMovementTrajectory("other", [sample, sample], 0));
@@ -302,6 +303,8 @@ public sealed class MovementTrajectoryEvaluatorTests
         Assert.Same(trajectories.Actors["host"], nextRevision.Actors["host"]);
         Assert.Equal(trajectories.MotionRevision, nextRevision.MotionRevision);
         Assert.Equal(trajectories.SamplingPolicyFingerprint, nextRevision.SamplingPolicyFingerprint);
+        Assert.Equal(plan.UniformRate, trajectories.UniformRate);
+        Assert.Equal(trajectories.UniformRate, nextRevision.UniformRate);
     }
 
     private static SceneDocument CreatePairedDocument() => SceneDocument.Create(

@@ -3,6 +3,7 @@ using PvpGuide.Application.Editing;
 using PvpGuide.Application.Projection;
 using PvpGuide.Domain;
 using PvpGuide.Domain.Timeline;
+using PvpGuide.Editor.Features.Trajectory;
 
 namespace PvpGuide.Editor.Features.TopView;
 
@@ -25,13 +26,20 @@ public enum TopViewAnchorMarker
     LockOnDiamond = 2,
 }
 
+public enum TopViewTickEndpointShape
+{
+    FreeArrow,
+    LockOnBar,
+}
+
 public sealed record TrajectoryPathPointGeometry(double TimeSeconds, Position3 Position);
 
 public sealed record TrajectoryFacingTickGeometry(
     double TimeSeconds,
     Position3 Position,
     double YawDegrees,
-    TopViewAnchorMarker AnchorMarker);
+    TopViewAnchorMarker AnchorMarker,
+    TopViewTickEndpointShape EndpointShape);
 
 public sealed class ActorTrajectoryOverlayGeometry
 {
@@ -94,6 +102,8 @@ public sealed record TrajectoryFacingTickPresentation(
     public double YawDegrees => Geometry.YawDegrees;
 
     public TopViewAnchorMarker AnchorMarker => Geometry.AnchorMarker;
+
+    public TopViewTickEndpointShape EndpointShape => Geometry.EndpointShape;
 }
 
 public sealed class ActorTrajectoryOverlayPresentation
@@ -193,7 +203,6 @@ public sealed class TopViewTrajectoryDisplay
 
 public static class TrajectoryOverlayLayout
 {
-    private const double TickRateHz = 5;
     private const double FutureBrightness = 0.45;
     private const double UnselectedBrightness = 0.35;
     private const double ComparisonEpsilon = 1e-12;
@@ -221,20 +230,26 @@ public static class TrajectoryOverlayLayout
             var sharedPath = trajectory.Samples
                 .Select(sample => new TrajectoryPathPointGeometry(sample.TimeSeconds, sample.Position))
                 .ToArray();
-            var tickSamples = SelectTickSamples(trajectory.Samples);
-            var freeTicks = tickSamples
+            var tickSampleIndices = TrajectoryTickSelectionPolicy.SelectOrderedSampleIndices(
+                trajectory,
+                trajectories.UniformRate);
+            var freeTicks = tickSampleIndices
+                .Select(index => trajectory.Samples[index])
                 .Select(sample => new TrajectoryFacingTickGeometry(
                     sample.TimeSeconds,
                     sample.Position,
                     sample.FreeYawDegrees,
-                    ToMarker(sample.AnchorKind)))
+                    ToMarker(sample.AnchorKind),
+                    TopViewTickEndpointShape.FreeArrow))
                 .ToArray();
-            var lockTicks = tickSamples
+            var lockTicks = tickSampleIndices
+                .Select(index => trajectory.Samples[index])
                 .Select(sample => new TrajectoryFacingTickGeometry(
                     sample.TimeSeconds,
                     sample.Position,
                     sample.LockOnFacing.YawDegrees,
-                    ToMarker(sample.AnchorKind)))
+                    ToMarker(sample.AnchorKind),
+                    TopViewTickEndpointShape.LockOnBar))
                 .ToArray();
             actors.Add(
                 actorId,
@@ -359,59 +374,6 @@ public static class TrajectoryOverlayLayout
         }
 
         return bodies;
-    }
-
-    private static IReadOnlyList<MovementTrajectorySample> SelectTickSamples(
-        IReadOnlyList<MovementTrajectorySample> samples)
-    {
-        if (samples.Count <= 1)
-        {
-            return samples;
-        }
-
-        var duration = samples[^1].TimeSeconds - samples[0].TimeSeconds;
-        if (duration <= 0 || ((samples.Count - 1) / duration) <= TickRateHz + ComparisonEpsilon)
-        {
-            return samples;
-        }
-
-        var selected = new SortedSet<int>();
-        var firstGridIndex = (long)Math.Ceiling((samples[0].TimeSeconds * TickRateHz) - ComparisonEpsilon);
-        var lastGridIndex = (long)Math.Floor((samples[^1].TimeSeconds * TickRateHz) + ComparisonEpsilon);
-        for (var gridIndex = firstGridIndex; gridIndex <= lastGridIndex; gridIndex++)
-        {
-            var requestedTime = gridIndex / TickRateHz;
-            selected.Add(FindNearestSampleIndex(samples, requestedTime));
-        }
-
-        for (var index = 0; index < samples.Count; index++)
-        {
-            if (samples[index].AnchorKind != TrajectoryAnchorKind.None)
-            {
-                selected.Add(index);
-            }
-        }
-
-        return Array.AsReadOnly(selected.Select(index => samples[index]).ToArray());
-    }
-
-    private static int FindNearestSampleIndex(
-        IReadOnlyList<MovementTrajectorySample> samples,
-        double requestedTime)
-    {
-        var bestIndex = 0;
-        var bestDistance = Math.Abs(samples[0].TimeSeconds - requestedTime);
-        for (var index = 1; index < samples.Count; index++)
-        {
-            var distance = Math.Abs(samples[index].TimeSeconds - requestedTime);
-            if (distance < bestDistance - ComparisonEpsilon)
-            {
-                bestIndex = index;
-                bestDistance = distance;
-            }
-        }
-
-        return bestIndex;
     }
 
     private static TopViewAnchorMarker ToMarker(TrajectoryAnchorKind anchorKind)
