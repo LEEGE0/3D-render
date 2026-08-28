@@ -7,7 +7,6 @@ public static class LockOnFacingEvaluator
     public const double CoincidenceEpsilon = 1e-6;
 
     private const double CoincidenceEpsilonSquared = CoincidenceEpsilon * CoincidenceEpsilon;
-    private const double StationaryRelativeVelocitySquaredEpsilon = double.Epsilon;
     private const double MachineEpsilon = 2.2204460492503131e-16;
 
     public static EvaluatedActorFacing Evaluate(
@@ -60,7 +59,7 @@ public static class LockOnFacingEvaluator
             }
 
             return new EvaluatedActorFacing(
-                ResolveTargetYaw(sourceRelative, lockOn.YawOffsetDegrees),
+                ResolveTargetYaw(sourceRelative, lockOn.YawOffsetDegrees, sourceActor.YawDegrees),
                 FacingResolutionKind.SnapTarget,
                 lockOn.SourceKeyframeId);
         }
@@ -70,7 +69,7 @@ public static class LockOnFacingEvaluator
         if (!IsCoincident(currentRelative))
         {
             return new EvaluatedActorFacing(
-                ResolveTargetYaw(currentRelative, lockOn.YawOffsetDegrees),
+                ResolveTargetYaw(currentRelative, lockOn.YawOffsetDegrees, authored.YawDegrees),
                 FacingResolutionKind.ContinuousTarget,
                 lockOn.SourceKeyframeId);
         }
@@ -83,7 +82,7 @@ public static class LockOnFacingEvaluator
                 out var previousRelative))
         {
             return new EvaluatedActorFacing(
-                ResolveTargetYaw(previousRelative, lockOn.YawOffsetDegrees),
+                ResolveTargetYaw(previousRelative, lockOn.YawOffsetDegrees, authored.YawDegrees),
                 FacingResolutionKind.CoincidentPrevious,
                 lockOn.SourceKeyframeId);
         }
@@ -127,10 +126,7 @@ public static class LockOnFacingEvaluator
                 continue;
             }
 
-            previousRelative = FindValidToCoincidentBoundary(
-                left,
-                right,
-                times[index + 1] - times[index]);
+            previousRelative = FindValidToCoincidentBoundary(left, right);
             return true;
         }
 
@@ -158,23 +154,55 @@ public static class LockOnFacingEvaluator
 
     private static RelativePosition FindValidToCoincidentBoundary(
         RelativePosition left,
-        RelativePosition right,
-        double durationSeconds)
+        RelativePosition right)
     {
-        // Parameterize backward from the coincident right endpoint. This makes the
-        // forward valid-to-coincident boundary the first exit root in [0, duration).
-        var relativeVelocityX = (left.X - right.X) / durationSeconds;
-        var relativeVelocityZ = (left.Z - right.Z) / durationSeconds;
-        var a =
-            (relativeVelocityX * relativeVelocityX) +
-            (relativeVelocityZ * relativeVelocityZ);
-        if (a <= StationaryRelativeVelocitySquaredEpsilon)
+        // The segment is r(u) = right + ((left - right) * u), u in [0, 1].
+        // Normalize delta into direction and length, then solve the equivalent
+        // quadratic in epsilon-scaled distance s = u * length. Its coefficients
+        // stay bounded even when a finite endpoint is too large to square.
+        var deltaX = left.X - right.X;
+        var deltaZ = left.Z - right.Z;
+        var deltaScale = Math.Max(Math.Abs(deltaX), Math.Abs(deltaZ));
+        if (deltaScale <= double.Epsilon || double.IsNaN(deltaScale))
         {
             return left;
         }
 
-        var b = 2 * ((right.X * relativeVelocityX) + (right.Z * relativeVelocityZ));
-        var c = right.SquaredLength - CoincidenceEpsilonSquared;
+        double scaledDeltaX;
+        double scaledDeltaZ;
+        if (double.IsPositiveInfinity(deltaScale))
+        {
+            scaledDeltaX = double.IsInfinity(deltaX) ? Math.CopySign(1, deltaX) : 0;
+            scaledDeltaZ = double.IsInfinity(deltaZ) ? Math.CopySign(1, deltaZ) : 0;
+        }
+        else
+        {
+            scaledDeltaX = deltaX / deltaScale;
+            scaledDeltaZ = deltaZ / deltaScale;
+        }
+
+        var scaledDeltaLength = Math.Sqrt(
+            (scaledDeltaX * scaledDeltaX) +
+            (scaledDeltaZ * scaledDeltaZ));
+        if (!(scaledDeltaLength > 0) || !double.IsFinite(scaledDeltaLength))
+        {
+            return left;
+        }
+
+        var directionX = scaledDeltaX / scaledDeltaLength;
+        var directionZ = scaledDeltaZ / scaledDeltaLength;
+        var segmentLength = deltaScale * scaledDeltaLength;
+
+        var rightXInEpsilonUnits = right.X / CoincidenceEpsilon;
+        var rightZInEpsilonUnits = right.Z / CoincidenceEpsilon;
+        const double a = 1;
+        var b = 2 * (
+            (rightXInEpsilonUnits * directionX) +
+            (rightZInEpsilonUnits * directionZ));
+        var c = Math.Min(
+            0,
+            (rightXInEpsilonUnits * rightXInEpsilonUnits) +
+            (rightZInEpsilonUnits * rightZInEpsilonUnits) - 1);
         var fourAC = 4 * a * c;
         var discriminant = (b * b) - fourAC;
         var discriminantTolerance =
@@ -200,27 +228,31 @@ public static class LockOnFacingEvaluator
             secondRoot = c / stableNumerator;
         }
 
-        var parameterTolerance = 32 * MachineEpsilon * Math.Max(1, durationSeconds);
+        var rootTolerance = 32 * MachineEpsilon;
         var found = false;
-        var boundaryParameter = 0d;
+        var boundaryDistanceInEpsilonUnits = 0d;
 
-        SelectEntryRoot(firstRoot);
-        SelectEntryRoot(secondRoot);
+        SelectExitRoot(firstRoot);
+        SelectExitRoot(secondRoot);
         if (!found)
         {
             return left;
         }
 
-        var clampedParameter = Math.Max(0, boundaryParameter);
-        return new RelativePosition(
-            right.X + (relativeVelocityX * clampedParameter),
-            right.Z + (relativeVelocityZ * clampedParameter));
-
-        void SelectEntryRoot(double root)
+        var boundaryDistance = Math.Max(0, boundaryDistanceInEpsilonUnits) * CoincidenceEpsilon;
+        var boundaryParameter = boundaryDistance / segmentLength;
+        if (!double.IsFinite(boundaryParameter) || boundaryParameter < 0 || boundaryParameter >= 1)
         {
-            if (!double.IsFinite(root) ||
-                root < -parameterTolerance ||
-                root >= durationSeconds)
+            return left;
+        }
+
+        return new RelativePosition(
+            right.X + (directionX * boundaryDistance),
+            right.Z + (directionZ * boundaryDistance));
+
+        void SelectExitRoot(double root)
+        {
+            if (!double.IsFinite(root) || root < -rootTolerance)
             {
                 return;
             }
@@ -233,9 +265,9 @@ public static class LockOnFacingEvaluator
                 return;
             }
 
-            if (!found || root < boundaryParameter)
+            if (!found || root < boundaryDistanceInEpsilonUnits)
             {
-                boundaryParameter = root;
+                boundaryDistanceInEpsilonUnits = root;
                 found = true;
             }
         }
@@ -244,10 +276,16 @@ public static class LockOnFacingEvaluator
     private static bool IsCoincident(RelativePosition relative) =>
         relative.SquaredLength <= CoincidenceEpsilonSquared;
 
-    private static double ResolveTargetYaw(RelativePosition relative, double offsetDegrees)
+    private static double ResolveTargetYaw(
+        RelativePosition relative,
+        double offsetDegrees,
+        double authoredFallbackYawDegrees)
     {
         var targetYaw = Math.Atan2(relative.Z, relative.X) * (180 / Math.PI);
-        return NormalizeYaw(targetYaw + offsetDegrees);
+        var resolvedYaw = NormalizeYaw(targetYaw + offsetDegrees);
+        return double.IsFinite(resolvedYaw)
+            ? resolvedYaw
+            : NormalizeYaw(authoredFallbackYawDegrees);
     }
 
     private static double NormalizeYaw(double yawDegrees)

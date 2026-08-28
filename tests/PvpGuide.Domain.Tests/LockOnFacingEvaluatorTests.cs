@@ -60,6 +60,22 @@ public sealed class LockOnFacingEvaluatorTests
     }
 
     [Fact]
+    public void Continuous_normalizes_exact_360_from_negative_z_plus_90_offset_to_zero()
+    {
+        var actor = Track(
+            "actor",
+            [Transform("actor-transform", 0, 0, 0, 0)],
+            [Lock("lock", 0, "target", 90)]);
+        var target = Track(
+            "target",
+            [Transform("target-transform", 0, 0, 0, -1)]);
+
+        var facing = Evaluate(actor, target, 0);
+
+        AssertFacing(0, FacingResolutionKind.ContinuousTarget, "lock", facing);
+    }
+
+    [Fact]
     public void Snap_holds_source_lock_time_direction_after_both_actors_move()
     {
         var actor = Track(
@@ -229,6 +245,25 @@ public sealed class LockOnFacingEvaluatorTests
         var facing = Evaluate(actor, target, 2);
 
         AssertFacing(90, FacingResolutionKind.CoincidentPrevious, "continuous", facing);
+    }
+
+    [Fact]
+    public void Continuous_tiny_finite_interval_keeps_finite_previous_direction()
+    {
+        var actor = Track(
+            "actor",
+            [Transform("actor-transform", 0, 0, 0, 0, 37)],
+            [Lock("continuous", 0, "target")]);
+        var target = Track(
+            "target",
+            [
+                Transform("target-valid", 0, 1, 0, 0),
+                Transform("target-inside", 1e-320, 0.0000005, 0, 0),
+            ]);
+
+        var facing = Evaluate(actor, target, 1e-320);
+
+        AssertFacing(0, FacingResolutionKind.CoincidentPrevious, "continuous", facing);
     }
 
     [Fact]
