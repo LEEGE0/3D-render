@@ -25,19 +25,33 @@
 
 ## CPU 전략
 
-- 시간 평가에서 매 프레임 전체 키프레임을 선형 검색하지 않고 정렬 배열과 이진 검색 또는 캐시된 구간 인덱스를 사용한다.
-- 문서 리비전과 시간 구간이 바뀌지 않으면 파생 궤적·판정을 재사용한다.
-- 드래그 중에는 선택 배우와 영향을 받는 락온 관계만 다시 계산한다.
+- 단일 snapshot 평가는 현재 시각의 transform과 Lock-on 방향을 계산한다.
+- 전체 궤적 평가는 actor/target transform cursor와 Lock-on cursor를 앞으로만 전진시키며 sample마다 전체 key를 처음부터 다시 검색하지 않는다.
+- `TrajectoryEvaluationDiagnostics`는 actor 수, sample 수, transform/Lock-on key 수, canonical anchor 시각과 evaluator `SegmentSteps`를 공개 immutable 값으로 기록한다.
+- xUnit의 복잡도 계약은 wall-clock이 아니라 `samples + keys`에 비례하는 hand-derived operation 상한을 사용한다. 느린 PC에서도 절대 시간 때문에 단위 테스트가 실패하지 않는다.
 - JSON 파싱, 체크섬, 자산 인덱싱과 렌더 준비를 작업 스레드로 보낸다.
 - 메인 스레드로 전달하는 결과는 작은 불변 스냅샷 또는 배치 갱신이다.
 - 병렬화 오버헤드가 더 큰 작은 계산에는 작업을 만들지 않는다.
+
+### Projection cache
+
+`SceneProjectionController`는 현재 source에 대해 궤적 cache 항목 하나만 유지한다. cache key는 `(MotionRevision, SamplingPolicyFingerprint)`다.
+
+- seek 또는 정상 playback tick으로 `(revision,time)`의 time이 실제로 달라지면 현재 시각의 `SceneSnapshot`만 다시 평가하고 궤적 geometry는 cache hit로 재사용한다. 반면 같은 시각의 play/pause 상태 전환은 `PlaybackClock.Changed`를 발생시키더라도 `(revision,time)` short-circuit에서 끝나므로 projection과 snapshot 평가 자체를 하지 않는다.
+- Action-only 편집: 문서 `Revision`만 증가하고 `MotionRevision`은 유지된다. `MovementTrajectorySet.WithRevision`이 얕은 immutable wrapper만 만들고 actor trajectory collection과 Editor geometry를 그대로 재사용한다.
+- actor 추가, transform 또는 Lock-on 편집: `MotionRevision`이 증가하므로 궤적을 다시 만든다.
+- `MotionRevision` 또는 sampling fingerprint가 달라지면 기존 한 항목을 새 계산 결과로 교체한다. 현재 controller에는 실행 중 source를 교체하는 API가 없으며, `Dispose`는 event 구독을 해제하고 cache를 명시적으로 비운다.
+- projection 중 consumer에서 재진입 요청이 와도 중첩 실행하지 않고 최신 요청 하나로 합친 뒤 현재 `SceneProjectionFrame`을 TopView와 WorldView에 끝까지 전달한다.
+
+현재 마일스톤은 motion 변경 시 대표 4-actor 전체 궤적을 다시 만드는 예외를 허용한다. Action-only reuse까지는 구현됐지만 영향 actor/변경 시간 구간만 다시 평가하는 증분 cache는 아직 없다. 대표 4 actors, actor당 transform/Lock-on key 각각 100개, 10초 fixture의 full rebuild p95가 8ms를 넘으면 이 예외는 즉시 완료 blocker가 된다.
 
 ## GPU 전략
 
 - Forward+를 사용하되 조명 수를 제한한다.
 - 교육용 기본 장면은 단순 재질, 하나의 주 조명과 약한 환경광으로 구성한다.
 - 경로·부채꼴·선은 가능한 한 배치 가능한 단순 메시로 그린다.
-- 각 프레임에 새로운 Mesh/Material을 만들지 않고 풀 또는 재사용 버퍼를 사용한다.
+- World trajectory는 actor별 `ImmediateMesh` 세 개와 `ShaderMaterial`을 한 번 만든다. `(MotionRevision, fingerprint)` geometry key가 바뀔 때만 surface를 다시 쓰며 playback tick에는 노드나 mesh를 만들지 않는다.
+- 현재 시각 변화는 `current_time_normalized` shader uniform만 갱신한다. `UV.x`에 저장된 normalized sample time과 비교해 미래 vertex를 45% 명도로 표시한다.
 - 미리보기 3D SubViewport의 해상도 배율을 50/75/100%로 조절한다.
 - 그림자 해상도, MSAA, SSAO 등은 품질 프리셋으로 묶고 자동 저하를 명시적으로 알린다.
 
@@ -52,14 +66,18 @@
 
 ## 두 뷰 최적화
 
-탑뷰는 3D 장면을 위에서 한 번 더 렌더하는 방식보다 2D 전용 표현을 우선한다. 이 방식은 판정 도형과 텍스트가 선명하고 GPU 비용이 낮다. 두 뷰는 같은 문서 평가 결과를 공유하되 각자 필요한 표현 데이터만 만든다.
+탑뷰는 3D 장면을 위에서 한 번 더 렌더하는 방식보다 2D 전용 표현을 사용한다. 이 방식은 판정 도형과 텍스트가 선명하고 GPU 비용이 낮다. `SceneProjectionController`가 원자적인 `SceneProjectionFrame` 하나를 만들고 TopView와 WorldView에 같은 frame, snapshot과 trajectory 인스턴스를 순서대로 전달한다.
 
 ```text
-SceneEvaluator 1회
-→ SceneSnapshot
-   ├─ TopViewProjection: 2D 위치·도형·텍스트
-   └─ WorldProjection: 3D Transform·Animation·Effects
+SceneProjectionController
+→ SceneProjectionFrame
+   ├─ SceneSnapshot: 현재 위치·작성 Yaw·resolved facing·semantic 상태
+   └─ MovementTrajectorySet: 전체 shared path와 free/Lock-on facing samples
+      ├─ TopView: immutable 2D geometry + selection/time presentation
+      └─ WorldView: world-fixed reusable mesh + time uniform
 ```
+
+TopView도 selection과 현재/미래 명도를 geometry에 굳히지 않는다. 선택 또는 현재 시각만 바뀌면 동일 geometry 참조 위에서 presentation만 다시 만든다. WorldView는 동일 geometry key일 때 actor별 geometry dictionary와 mesh node를 재사용한다.
 
 ## 렌더 성능
 
@@ -82,10 +100,34 @@ C++ GDExtension은 대량 기하 교차나 궤적 생성이 실제 병목이고 
 
 ## 성능 회귀 테스트
 
-- 4명/100키프레임, 16명/1,000키프레임 합성 문서 평가 벤치마크
-- 10초 구간 궤적 생성 시간
+- 4 actors/actor당 transform·Lock-on key 각각 100개, 10초 구간의 궤적 생성 benchmark
+- 16 actors/actor당 transform·Lock-on key 각각 1,000개의 대규모 진단 benchmark
 - 두 뷰 갱신 시 프레임 시간 상위 백분위
 - 문서 저장·로드 시간과 할당량
 - 1080p 60FPS 10초 렌더의 프레임 누락 여부
 
-벤치마크는 절대 통과 기준과 이전 기준 대비 회귀율을 함께 사용한다. 느린 개발 PC에서 무조건 실패하지 않도록 하드웨어 정보를 결과에 기록한다.
+실행 명령은 다음과 같다.
+
+```powershell
+& .\scripts\Measure-TrajectoryPerformance.ps1
+```
+
+스크립트는 PowerShell 7과 `D:\3D-render\tools\nuget-packages`를 사용한다. test assembly를 먼저 build한 뒤 `--no-build --no-restore` diagnostic probe를 실행한다. test process 안에서 warm-up 후 실제 `SceneDocument.CreateMovementTrajectories(plan)`과 `CreateSnapshot(time)` 호출만 `Stopwatch`로 감싸므로 build, restore와 test runner 시작 시간은 p95에 포함되지 않는다.
+
+2026-08-28 fresh 실행에서 얻은 진단값은 다음과 같다.
+
+| Fixture | Build p95 | Snapshot p95 | Actors | Samples | Keys | Segment steps | 판정 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 4×100, 10초 | 1.8741ms | 0.0113ms | 4 | 1,588 | 800 | 3,968 | 8ms gate PASS |
+| 16×1,000, 10초 | 27.0564ms | 0.3174ms | 16 | 20,752 | 32,000 | 73,472 | 기록 전용 |
+
+대표 marker 형식은 다음과 같다.
+
+```text
+TRAJECTORY_PERFORMANCE_RESULT fixture=4x100 build_p95_ms=1.874100 snapshot_p95_ms=0.011300 actors=4 samples=1588 keys=800 segment_steps=3968 ...
+TRAJECTORY_PERFORMANCE_GATE=PASS build_p95_ms=1.874100 limit_ms=8.00
+```
+
+이 수치는 현재 장비에서 한 번 fresh 실행한 진단값이며 다른 장비의 절대 성능을 보장하지 않는다. 4×100의 8ms gate만 현재 완료 기준으로 사용하고, 16×1,000은 wall-clock으로 xUnit을 실패시키지 않고 수치와 선형 operation count만 기록한다.
+
+대규모 16 actors/1,000 keys 지원을 완료로 선언하기 전에는 영향 actor와 변경 시간 구간만 무효화하는 증분 trajectory cache를 구현해야 한다. 현재 full motion-revision rebuild 예외를 장기 구조로 간주하지 않는다.

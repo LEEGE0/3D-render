@@ -31,8 +31,8 @@ TopView/세 Track Surface + Transform/Action/Lock Inspector + Toolbar Controller
           DocumentSession ───────────────────────────── PlaybackClock
                 │ 검증된 세 track 명령                       │ time + Changed
                 ▼                                           │
-          SceneDocument ── revision + Changed ──────────────┤
-                │ Transform 보간 + Action/Lock left-hold     ▼
+          SceneDocument ── revision/motion revision ────────┤
+                │ snapshot + sample plan + trajectory        ▼
                 └──────────────────────────────── SceneProjectionController
                                                     ┌─────┴─────┐
                                                     ▼           ▼
@@ -42,7 +42,8 @@ TopView/세 Track Surface + Transform/Action/Lock Inspector + Toolbar Controller
 - `DocumentSession`은 열린 문서, actor와 Transform/Action/Lock-on 선택, active track, 변환 미리보기, 세 track 공유 Undo/Redo 스택과 문서 길이/FPS로 만든 `PlaybackClock`을 소유한다.
 - `ActorDisplayInfo`는 actor ID, 표시 이름과 역할만 담은 Application 불변 계약이다. 탑뷰는 이 조회 API를 사용하며 `ActorTrack`이나 원본 문서를 노출받지 않는다.
 - `TopViewSurface`와 `TransformInspectorController`는 `SceneDocument`를 직접 보유하거나 수정하지 않는다. 영구 변경은 세션 공개 API를 통해서만 수행한다.
-- `SceneProjectionController`는 문서 revision 또는 playback time이 바뀌면 `SceneSnapshot`을 한 번 만들고 동일 인스턴스를 탑뷰와 3D 소비자에 전달한다. 중복 방지 키는 revision 단독이 아니라 `(revision, time)`이다.
+- `SceneProjectionController`는 문서 revision 또는 playback time이 바뀌면 `SceneSnapshot`, `MovementTrajectorySet`과 sampling fingerprint를 검증된 `SceneProjectionFrame` 하나로 만들고 동일 frame 인스턴스를 탑뷰와 3D 소비자에 전달한다. 중복 방지 키는 revision 단독이 아니라 `(revision, time)`이다.
+- trajectory cache는 `(MotionRevision, TrajectorySamplePlan.Fingerprint)` 단일 항목이다. Action-only 변경은 `MovementTrajectorySet.WithRevision`으로 wrapper revision만 바꾸고 actor geometry identity를 보존하며, Transform/Lock-on/actor 변경은 rebuild한다.
 - `TransformPreviewController`는 동일한 nullable `TransformPreview` 인스턴스를 두 뷰에 전달한다. 이 값은 저장·직렬화되지 않으며 문서 revision도 올리지 않는다.
 - 마우스를 놓거나 Inspector에서 Apply/Enter를 제출할 때만 `ReplaceTransformCommand` 하나가 확정된다.
 - `DocumentSession.CommitPreviewDetailed()`는 확정 결과를 공개 `SceneEditResult`로 반환하며, 기존 `CommitPreview()` bool API는 호환성을 위해 유지되고 `Applied`일 때만 `true`를 반환한다.
@@ -61,18 +62,21 @@ WorldViewPanel/WorldViewportContainer/WorldViewport/WorldRoot
   ├─ DirectionalLight3D
   ├─ Ground
   └─ Actors
-InspectorPanel/TransformInspector
-  ├─ SelectedActorLabel
-  ├─ XInput / YInput / ZInput / YawInput
-  ├─ ApplyButton / UndoButton / RedoButton
-  └─ ErrorLabel
-InspectorPanel/ActionInspector
-  ├─ ActionSelectedKeyframeLabel / ActionTimeInput / ActionKeyInput
-  └─ ActionApplyButton / ActionErrorLabel
-InspectorPanel/LockOnInspector
-  ├─ LockOnSelectedKeyframeLabel / LockTimeInput / LockEnabledInput
-  ├─ LockTargetInput / LockModeInput / LockYawOffsetInput
-  └─ LockApplyButton / LockErrorLabel
+InspectorPanel
+  ├─ HistoryToolbar
+  │  └─ UndoButton / RedoButton
+  ├─ TransformInspector
+  │  ├─ SelectedActorLabel
+  │  ├─ XInput / YInput / ZInput / YawInput
+  │  ├─ ApplyButton
+  │  └─ ErrorLabel
+  ├─ ActionInspector
+  │  ├─ ActionSelectedKeyframeLabel / ActionTimeInput / ActionKeyInput
+  │  └─ ActionApplyButton / ActionErrorLabel
+  └─ LockOnInspector
+     ├─ LockOnSelectedKeyframeLabel / LockTimeInput / LockEnabledInput
+     ├─ LockTargetInput / LockModeInput / LockYawOffsetInput
+     └─ LockApplyButton / LockErrorLabel
 TimelinePanel/TimelineControls
   ├─ PlaybackButtons/PlayPauseButton / StopButton
   ├─ TransformTrackSurface
@@ -86,11 +90,13 @@ TimelinePanel/TimelineControls
   └─ TimelineStatus
 ```
 
+`Actors/TrajectoryOverlayRoot`는 `.tscn`에 저장된 정적 노드가 아니라 `WorldViewProjectionAdapter` 생성자가 런타임에 추가하는 소유 노드다. actor body root와 trajectory container를 형제로 분리해 궤적 mesh가 actor의 현재 transform을 따라 다시 이동하지 않게 한다.
+
 ## 뷰포트 구성
 
 - 탑뷰는 2D `SubViewport` 또는 전용 `Control`/`Node2D` 계층으로 구현한다.
 - 3D는 별도 `SubViewport`와 `Node3D` 장면을 사용한다.
-- 두 뷰는 렌더 트리를 공유하지 않고 `SceneSnapshot`을 각자의 표현 노드에 적용한다.
+- 두 뷰는 렌더 트리를 공유하지 않지만 동일 `SceneProjectionFrame`의 snapshot과 trajectory를 각자의 표현 노드에 적용한다.
 - 미리보기 품질, 그림자, MSAA와 해상도 배율은 뷰별 설정으로 둔다.
 - 3D 선택 피킹은 물리 충돌 또는 렌더 ID 방식 중 단순하고 안정적인 방법을 먼저 사용한다.
 
@@ -124,7 +130,7 @@ TimelinePanel/TimelineControls
 
 ### 회전 도구
 
-수평 Yaw를 기본으로 하고 선택 배우 중심에서 28px 떨어진 방향 핸들과 숫자 입력을 제공한다. 0°는 +X, 90°는 +Z이며 3D actor root에는 `rotationY = -DegToRad(yaw)`를 적용한다. 락온 기반 방향 편집은 후속 단계다.
+수평 authored Yaw 편집은 선택 배우 중심에서 28px 떨어진 방향 핸들과 숫자 입력을 사용한다. 0°는 +X, 90°는 +Z이며 3D actor root에는 `rotationY = -DegToRad(yaw)`를 적용한다. committed body 방향은 `SceneSnapshot.ActorFacings`의 resolved Yaw를 표시하지만, 선택 actor의 원형 편집 핸들은 `ActorTransforms`의 authored Yaw에 남는다. preview 중에는 위치와 Yaw를 authored 초안으로 함께 덮어써 사용자가 편집 중인 값과 Lock-on 계산 결과를 혼동하지 않게 한다.
 
 ### 키프레임 도구
 
@@ -190,8 +196,12 @@ Update는 Execute에서 before→after, Undo에서 after→before를 검증한�
 - 몸체 hit 반경은 16px, 방향 핸들 hit 반경은 10px이며 둘이 겹치면 핸들을 우선한다.
 - 28px 원형 회전 핸들은 선택 actor에만 그려지고 hit-test 대상도 선택 actor 하나로 일치한다.
 - 드래그 미리보기는 별도 색으로 표시하며 `Escape` 또는 선택 변경 시 즉시 committed snapshot으로 복원한다.
-- semantic overlay는 lock line/target marker를 actor body 아래, actor body/선택 표시를 중간, action label을 위에 그리는 고정 draw order를 사용한다. 이동 궤적·충돌원·뒤잡 부채꼴은 후속 레이어다.
+- `TrajectoryOverlayLayout`의 고정 draw order는 `SharedPaths → FreeFacingTicks → LockOnFacingTicks → LockLines → ActorBodies → TargetMarkers → Text`다. 충돌원과 뒤잡 부채꼴은 후속 레이어다.
 - `Apply`/`ApplyPreview`는 preview 위치까지 반영한 immutable `DisplayedSemanticOverlays`를 atomic하게 교체하고 `_Draw()`는 다시 계산하지 않고 이 동일 상태를 소비한다. 이 public read-only state는 실제 surface가 받은 action label/lock badge/line/target marker를 runtime과 진단 도구가 확인하는 production seam이다.
+- `TopViewTrajectoryDisplay`는 받은 `SceneSnapshot`, `MovementTrajectorySet`, immutable `TrajectoryOverlayGeometry`, 시간·선택 밝기를 가진 `TrajectoryOverlayPresentation`, actor body layout을 한 단위로 보관한다. `TopViewSurface._Draw()`는 Domain trajectory를 다시 평가하지 않고 이 저장된 표시 모델만 소비한다.
+- `TrajectoryOverlayGeometry`는 모든 sample의 shared path와 공통 `TrajectoryTickSelectionPolicy`가 고른 자유/Lock-on 방향 tick을 분리한다. tick은 최대 5Hz uniform candidate와 모든 Transform/Lock-on/active-target anchor를 합쳐 TopView와 WorldView가 같은 sample index를 사용한다. 자유 tick은 화살표와 transform 원, Lock-on tick은 bar와 Lock-on 마름모로 색뿐 아니라 모양도 다르다.
+- 시간 변화는 geometry를 다시 만들지 않고 presentation만 만든다. 현재/과거 sample 밝기는 1.0, 미래는 0.45이며 선택되지 않은 actor는 여기에 0.35 선택 밝기를 곱한다. `MovementTrajectorySet.Actors` 참조가 같으면 Action-only revision과 seek에서도 기존 geometry 인스턴스를 재사용한다.
+- committed actor body는 `ActorFacings`의 resolved Yaw로 그리되 선택 actor의 편집 handle은 authored Yaw로 그린다. `ApplyPreview`는 trajectory geometry/presentation을 건드리지 않고 body 위치·Yaw와 semantic line 위치만 초안으로 덮는다. `Escape`, 선택 변경, seek 또는 편집 잠금은 `DocumentSession.CancelPreview()`를 통해 null preview를 두 view에 보내 committed facing/body로 복원한다.
 - 줌과 팬은 좌표 데이터를 바꾸지 않는다.
 - 화면 좌표와 문서 좌표 변환은 카메라 변환 하나에서 수행한다.
 - 선택 허용 오차는 줌에 따라 화면 픽셀 기준으로 유지한다.
@@ -211,6 +221,24 @@ Update는 Execute에서 before→after, Undo에서 after→before를 검증한�
 - 교육 오버레이는 모델 재질과 분리한 디버그/설명 렌더 계층을 사용한다.
 - 지면, 조명과 배경은 영상 가독성을 우선해 단순하게 유지한다.
 
+### World-fixed trajectory mesh
+
+`WorldViewProjectionAdapter`는 `Actors` 바로 아래에 단 하나의 `TrajectoryOverlayRoot`를 만들고, 그 아래 actor별 `Trajectory_<sanitized-id>` container를 둔다. 이 container는 `Actor_<id>` body root의 자식이 아니므로 sample이 가진 world position이 actor의 현재 위치·회전에 다시 곱해지지 않는다. actor가 snapshot에서 사라지면 body root와 trajectory container를 각각 adapter 소유 dictionary에서 제거하고 `QueueFree()`하며, `Actors` 아래의 외부 노드는 건드리지 않는다.
+
+actor trajectory container는 생성 시 다음 세 `MeshInstance3D`/`ImmediateMesh`/`ShaderMaterial` 묶음을 한 번 만든다.
+
+| node | primitive | 의미 |
+| --- | --- | --- |
+| `SharedTrajectory` | `LineStrip` | authored position의 공통 이동 경로 |
+| `FreeFacingTicks` | `Lines` | authored 자유 방향 tick |
+| `LockOnFacingTicks` | `Lines` | resolved Lock-on 방향 tick |
+
+`WorldTrajectoryGeometry`는 Domain `Position3`을 `WorldPosition`으로 옮기고 지면 z-fighting을 피하려고 Y에 `0.025`를 더한다. tick 길이는 world unit `0.35`다. 각 vertex의 정규화 시간은 `UV.x`에 기록된다. `TrajectoryTimeFade.gdshader`는 `UV.x <= current_time_normalized`이면 밝기 1.0, 미래면 0.45를 사용하며 unshaded/cull-disabled로 표시한다.
+
+`WorldTrajectoryRenderState`의 `WorldTrajectoryGeometryKey`는 `(MotionRevision, SamplingPolicyFingerprint)`다. key가 같으면 actor geometry dictionary를 그대로 재사용한다. adapter도 actor geometry 참조가 같을 때 `ImmediateMesh.ClearSurfaces()`와 vertex rewrite를 건너뛰고 세 material의 `current_time_normalized` uniform만 갱신한다. 따라서 seek, play와 Action-only edit는 node·mesh·material·vertex buffer identity를 유지한다. motion revision 또는 fingerprint가 바뀐 경우에만 동일 node/resource 안의 세 mesh surface를 다시 쓴다.
+
+committed apply와 preview의 방향 원본은 의도적으로 다르다. committed `Apply`/`RestoreCommittedTransforms`는 `SceneSnapshot.ActorFacings`를 body root에 적용하고 authored transform은 위치와 편집 handle의 원본으로 남긴다. `ApplyPreview`는 선택 actor body root를 authored 초안 position/Yaw로 임시 덮지만 trajectory geometry는 바꾸지 않는다. Escape로 preview가 null이 되면 마지막 committed snapshot의 resolved facing을 즉시 다시 적용한다.
+
 ## 타임라인 재생 상태와 투영 소유권
 
 완료된 3A는 읽기 전용 playback foundation이고, 3B는 transform marker/CRUD, 현재 foundation은 Action/Lock-on marker·left-hold·CRUD·overlay를 추가한다. `SceneDocument`는 duration/FPS와 세 track committed keyframe을 소유하고, `DocumentSession`은 해당 문서에서 만든 `PlaybackClock`·actor/세 track 비영구 selection을 세션 상태로 소유한다. 현재 시각, 재생 여부, active track과 selection은 저장 문서, revision 또는 Undo/Redo history에 들어가지 않는다.
@@ -223,7 +251,9 @@ Update는 Execute에서 before→after, Undo에서 after→before를 검증한�
 - Main의 정상 `_Process(delta)`는 playing 상태에서 clock을 전진시킨다. 끝을 넘으면 duration에 clamp하고 자동 pause한다. 런타임 통합 검사는 프레임 수나 wait에 의존하지 않도록 `Advance()`만 결정적으로 직접 호출한다.
 - controller는 clock 변경을 slider, `현재 ...초 / 전체 ...초 · 프레임 ...` label, 재생/일시정지 버튼 문구에 반영한다. controller 자신은 snapshot을 만들거나 view transform을 직접 바꾸지 않는다.
 
-`SceneProjectionController`는 문서 변경과 clock 변경을 모두 구독하고 현재 시각의 snapshot 하나를 두 view consumer에 전달한다. snapshot에는 보간 transform과 stepped Action/Lock-on state가 함께 있다. 마지막 적용 키가 `(revision, time)`과 같으면 play/pause처럼 표시 상태만 바뀐 event에서 snapshot을 중복 적용하지 않는다. 따라서 같은 revision에서도 seek/advance/stop으로 time이 바뀌면 투영하고, 같은 time에서도 committed edit로 revision이 바뀌면 다시 투영한다.
+`SceneProjectionController`는 문서 변경과 clock 변경을 모두 구독하고 현재 시각의 `SceneProjectionFrame` 하나를 두 view consumer에 전달한다. frame에는 보간 transform·stepped Action/Lock-on·resolved facing의 snapshot과 전체 paired trajectory, sampling fingerprint가 함께 있다. 생성자는 document/revision/motion revision/fingerprint가 서로 다르면 frame을 거부한다. 마지막 적용 키가 `(revision, time)`과 같으면 play/pause처럼 표시 상태만 바뀐 event에서 중복 적용하지 않는다. 따라서 같은 revision에서도 seek/advance/stop으로 time이 바뀌면 투영하고, 같은 time에서도 committed edit로 revision이 바뀌면 다시 투영한다.
+
+projection 중 consumer나 source event observer가 다시 projection을 요청하면 controller는 stack 재귀로 들어가지 않고 pending flag를 세운다. 현재 apply가 끝난 뒤 clock의 최신 time을 다시 읽어 마지막 요청을 처리한다. plan 생성·trajectory/snapshot 평가 동안 source metadata가 바뀌면 최대 3번 재시도하며, stable metadata와 일치하는 frame만 게시한다. trajectory cache는 한 항목만 유지해 오래된 여러 motion revision을 무제한 보유하지 않는다. TopView와 WorldView에는 같은 `SceneProjectionFrame` 인스턴스를 전달하므로 두 view가 다른 snapshot/trajectory 조합을 표시할 수 없다.
 
 시간 상태가 바뀌면 `DocumentSession`은 활성 `TransformPreview`를 clear한다. `TransformPreviewController`가 nullable preview를 두 consumer에 전달하므로 world는 마지막 committed 표시를 복원하고 top도 preview overlay를 제거한다. 이어 현재 `(revision,time)` snapshot이 두 view에 적용된다. seek 때문에 preview가 문서 mutation으로 오인되지 않으며 revision, 두 keyframe과 Undo/Redo stack은 그대로다.
 
@@ -231,7 +261,7 @@ Update는 Execute에서 before→after, Undo에서 after→before를 검증한�
 
 Action/Lock-on marker 선택은 observer가 seek를 다시 바꿀 수 있다는 전제에서 최대 32회의 bounded 안정화 루프를 사용한다. 매 회 최신 문서에서 target actor와 full keyframe을 다시 읽고 pause·target time seek를 수행한 뒤 actor, time, playing, active track, selected ID와 full payload가 모두 target과 일치할 때만 `Applied`를 반환한다. 두 번 이상 유한하게 다른 시각으로 리디렉션돼도 다시 target을 시도하며, attempt 시작 이후 실제 게시된 selection의 actor/track/ID/full-frame 서명을 사용해 이전 attempt의 force 상태를 누적하지 않고 최종 안정 target full payload를 정확히 한 번만 게시한다. 같은 시각 무-seek cross-track과 rollback 뒤 이동된 frame selection 보존 상태는 실제 target 게시가 없으면 한 번 강제 게시하고, final event observer가 active track을 바꾸면 복원된 target context를 다시 게시한다. target이 사라지거나 32회 안에 안정화되지 않으면 호출 전 actor/time/playing/track/세 selection을 원자적으로 복구하고 성공을 보고하지 않는다.
 
-후속 full timeline은 확대·스크롤·시간 스냅과 선택 keyframe drag/복제 정책을 추가한다. 현재 단계는 Action/Lock-on 단계 track 편집과 교육 overlay까지 구현했지만, Lock-on target 방향에 따른 actor Yaw 계산, 자유 방향/Lock-on 이동 궤적, 실제 DSR animation, render 실행이나 gamepad 입력은 구현하지 않았다.
+후속 full timeline은 확대·스크롤·시간 스냅과 선택 keyframe drag/복제 정책을 추가한다. 현재 단계에는 Action/Lock-on 단계 track 편집, 세 mode의 resolved actor facing, 자유 방향/Lock-on paired trajectory와 TopView/WorldView 표시까지 구현되어 있다. 실제 DSR animation 연결과 render 실행은 별도 후속이며 gamepad 입력은 현재 범위에서 제외한다.
 
 ## 속성 패널
 
@@ -347,7 +377,7 @@ ACTION_LOCK_ON_REVIEW_FIXES_READY empty_action_add=1 empty_lock_add=1 detailed_e
 - Stop: 0초 paused로 복귀; 0초 marker가 있으면 그 marker를 선택해 편집 상태 복원
 - 렌더(후속): 결정적 시간 샘플을 사용하고 문서를 읽기 전용 스냅샷으로 고정
 
-다음 구현 단위는 `LockOnTrackingMode`와 offset/target을 실제 방향 계산에 연결하고, Lock-on 이동과 자유 방향 이동의 궤적을 동일 snapshot 경계에서 비교 표시하는 것이다.
+현재 완료 범위는 `LockOnTrackingMode`와 offset/target의 방향 계산, paired trajectory, 원자적 frame 배포, TopView immutable geometry/presentation, World-fixed reusable mesh와 실제 Godot runtime marker 검증까지다. 다음 구현 범위는 실제 DSR animation catalog/clip 배선, 충돌·뒤잡 교육 판정, full timeline과 렌더 실행이다. 파생 trajectory 저장, schema v3, 온라인 동기화, 원격 분석과 저작권 게임 자산 번들은 제외한다.
 
 렌더 중 원본 문서를 수정할 수 있게 하더라도 현재 렌더는 시작 시점 스냅샷만 사용한다.
 

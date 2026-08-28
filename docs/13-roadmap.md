@@ -104,40 +104,61 @@ selection, playback time, preview와 history stack은 저장되는 `SceneDocumen
 - [x] 동일 `SceneSnapshot`의 stepped state를 사용하는 TopView action/lock line/target marker와 WorldView `ActionLabel`/`LockBadge`/재사용 `LockLine`
 - [x] 실제 Button/SpinBox/LineEdit/OptionButton/surface signal, hand-derived revision/history/apply count, selection, left-hold, playback lock, cross-time·same-time Action↔Lock-on Inspector 전환과 두 overlay를 검증하는 exact runtime marker
 
-3C는 의미 track을 저장·편집·평가·표시하는 foundation이다. mode/offset은 문서와 overlay에 보존되고, global history toolbar로 세 track command를 active marker 전환 없이 왕복한다. 아직 target 방향으로 actor Yaw를 계산하지 않으며, 실제 DSR animation clip이나 combat rule 판정을 연결하지 않는다.
+3C는 의미 track을 저장·편집·평가·표시하는 foundation이다. mode/offset은 문서와 overlay에 보존되고, global history toolbar로 세 track command를 active marker 전환 없이 왕복한다. target 방향 actor Yaw와 trajectory는 단계 3D에서 완료했으며, 실제 DSR animation clip과 combat rule 판정은 여전히 후속이다.
 
-### 다음 구현 단위 — Lock-on 방향 계산과 이동 궤적
+### 완료된 단계 3D — Lock-on 방향 계산과 이동 궤적
 
-- target actor의 같은 snapshot transform에서 바라보는 방향을 계산하고 `yawOffsetDegrees`를 적용한다.
-- `Snap`, `Continuous`, `KeyframeOnly`가 방향 갱신 시점에 미치는 차이를 순수 Domain/Application 계약과 hand-derived fixture로 고정한다.
-- 자유 방향 이동과 Lock-on 방향 이동을 같은 시간 샘플에서 평가해 TopView/WorldView 이동 궤적으로 비교 표시한다.
-- target 없음/삭제, actor 위치 일치, 0/360 및 정확한 180° 방향, scrub/playback/preview 경계를 결정적으로 처리한다.
-- timeline 확대·스크롤·스냅과 marker drag/복제 UX의 우선순위를 함께 검토한다.
+- [x] 같은 snapshot의 actor/target X/Z 위치와 `yawOffsetDegrees`로 Lock-on facing을 계산하고 `[0,360)`으로 정규화
+- [x] `Snap` 활성 키프레임 시각 방향 고정, `Continuous` 현재 시각 추적, `KeyframeOnly` authored Yaw 유지
+- [x] 위치 일치 epsilon `1e-6`, 이전 유효 방향/ authored Yaw fallback과 missing target authored fallback
+- [x] 결정적 uniform sample과 Transform/Lock-on exact anchor를 포함한 immutable trajectory plan/result
+- [x] 자유 방향과 Lock-on 방향이 같은 위치 경로를 공유하고 free/Lock-on Yaw tick만 분리하는 TopView 표시
+- [x] actor body와 독립된 world-fixed `TrajectoryOverlayRoot`, 재사용 mesh/material과 seek-time fade를 사용하는 WorldView 표시
+- [x] TopView/WorldView가 동일 `SceneProjectionFrame`과 같은 ordered sample을 소비하는 shared frame 계약
+- [x] Action-only revision의 trajectory payload/cache/node identity 재사용과 Transform/Lock-on motion 변경의 정확히 한 번 full rebuild
+- [x] snapshot/facing/trajectory 평가 전후 byte-for-byte 동일한 `pvp-guide-scene/2` 저장 회귀
+- [x] exact `LOCK_ON_MOTION_READY ...` Godot runtime marker와 네 test project 회귀
+
+`pvp-guide-scene/2`는 Lock-on 재평가에 필요한 `yawOffsetDegrees`와 `trackingMode`를 이미 저장한다. facing, trajectory, MotionRevision, cache와 current time은 런타임 파생 상태이므로 저장하지 않으며 단계 3D 때문에 schema를 올리지 않는다.
+
+대표 `4 actors × actor당 100 transform + 100 Lock-on key`의 production trajectory build p95 임시 gate는 `8ms`이고 fresh 진단 `1.8741ms`로 통과했다. `16 actors × actor당 1,000 transform + 1,000 Lock-on key`의 fresh `27.0564ms`는 기록용이며 wall-clock 완료 gate가 아니다.
+
+### 다음 구현 단위 — 증분 trajectory cache와 후속 UX 경계
+
+- 현재 motion 변경의 전체 trajectory rebuild를 actor별·변경 구간별 증분 cache로 세분화한다.
+- 대규모 actor/key 규모를 완료 범위로 올리기 전에 deterministic operation-count와 대표/대규모 production p95를 다시 고정한다.
+- timeline 확대·스크롤·프레임/키프레임/구간 스냅은 우선순위 검토만 완료했으며 단계 3D와 분리한 후속 UX 작업으로 진행한다.
+- marker drag/복제도 기존 command/stale-preimage/Undo·Redo 계약을 유지하는 별도 작업으로 설계한다.
 
 ### 단계 3 후속 작업
 
-- Lock-on target과 mode/offset 기반 방향 계산
-- 자유 방향/Lock-on 이동 궤적
+- actor별·변경 구간별 증분 trajectory cache
 - 타임라인 확대·스크롤·프레임/키프레임/구간 스냅
+- marker drag/복제 UX
+- 실제 DSR animation과 root motion 연결
 
 ### 완료 기준
 
-단계 3 전체 완료 기준은 네 캐릭터 장면을 60FPS 목표로 재생하고, 세 track CRUD를 Undo/Redo할 수 있으며, 락온 이동과 자유 방향 이동이 예상대로 다르게 동작하는 것이다. 현재 3A/3B/3C는 시간 평가·재생, transform CRUD와 Action/Lock-on 단계 상태 foundation까지 완료했다. Lock-on 방향 계산과 이동 궤적이 다음 범위다.
+단계 3의 현재 완료 기준은 네 캐릭터 장면에서 세 track CRUD를 Undo/Redo하고, 같은 위치 경로 위에서 authored/free Yaw와 Lock-on-resolved Yaw의 차이를 두 뷰에서 확인하며, exact runtime marker와 자동 테스트를 통과하는 것이다. 3A/3B/3C/3D로 시간 평가·재생, transform CRUD, Action/Lock-on 단계 상태, Lock-on facing과 trajectory 표시까지 완료했다. root motion이나 별도의 Lock-on 위치 이동 모델을 구현했다는 뜻은 아니다.
 
 ## 단계 4 — 가이드 가져오기와 저장
 
-### 작업
+### 완료된 기반
 
-- `gangqueen-topview-guide-v1` 가져오기
-- 좌표 배율·원점 설정
-- 내부 버전형 JSON
-- 원자적 저장·다시 열기
+- [x] 저작권 없는 합성 `gangqueen-topview-guide-v1` fixture 가져오기
+- [x] 좌표 배율·원점 설정과 원본 확장 payload 보존
+- [x] `pvp-guide-scene/1` migration을 포함한 strict `pvp-guide-scene/2` 저장·다시 열기
+- [x] 검증된 임시 파일과 원자 교체를 사용하는 저장
+- [x] Lock-on motion 파생 상태 비저장 및 평가 전후 serialize 동일성 회귀
+
+### 후속 작업
+
 - 자동 저장·복구
 - 축약 회귀 샘플
 
 ### 완료 기준
 
-`전략1`과 `뒤로빼기`를 불러와 역할·시간·좌표·방향·락온·행동을 보존하고 저장 왕복 테스트를 통과한다.
+현재 합성 fixture는 역할·시간·좌표·방향·락온·행동을 보존하고 저장 왕복 테스트를 통과한다. 실제 `전략1`과 `뒤로빼기` 자료 연결, 자동 저장과 사용자용 복구 흐름은 후속 완료 조건이다.
 
 ## 단계 5 — 전투 시각화
 
@@ -169,6 +190,8 @@ selection, playback time, preview와 history stack은 저장되는 `SceneDocumen
 
 동일 장면을 1080p 지정 FPS로 반복 렌더해 프레임 수와 의미 상태가 일치하고 인코딩 실패 후 재시도가 가능하다.
 
+현재 `RenderQueue` 계획/검증 기반만 존재하며 Godot Movie Maker·FFmpeg를 통한 실제 영상 렌더 실행은 아직 완료되지 않았다.
+
 ## 단계 7 — DSR 애니메이션 자산 파이프라인
 
 ### 병렬 연구 트랙
@@ -184,6 +207,8 @@ selection, playback time, preview와 history stack은 저장되는 `SceneDocumen
 
 최소 한 세트의 이동, 공격과 뒤잡 동기화 애니메이션을 로컬 카탈로그로 연결하며 자산이 없는 환경에서는 같은 문서가 플레이스홀더로 열린다.
 
+현재 단계 3D trajectory는 Transform 보간 위치만 사용한다. 실제 DSR HKX animation과 root motion 추출·합성은 단계 7 전까지 완료로 간주하지 않는다.
+
 ## 단계 8 — 사용성·성능·배포
 
 ### 작업
@@ -194,6 +219,8 @@ selection, playback time, preview와 history stack은 저장되는 `SceneDocumen
 - 깨끗한 Windows 11 오프라인 배포 테스트
 - 샘플 프로젝트와 사용자 가이드
 - 릴리스 패키지와 체크섬
+
+게임패드 조작은 현재 제품 요구 범위에서 제외하며, 별도 요구가 확정되기 전에는 단계 8 완료 조건에 포함하지 않는다.
 
 ### 완료 기준
 

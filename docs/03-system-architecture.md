@@ -40,21 +40,33 @@ Godot 장면과 C# 스크립트로 창, 패널, 입력, 2D/3D 투영과 시각 �
 
 파일 시스템, JSON, 로컬 설정, 이미지 시퀀스, 외부 도구 실행과 자산 카탈로그를 구현한다. 모든 외부 경계는 인터페이스 뒤에 두어 테스트 대역으로 교체할 수 있게 한다.
 
-## 주요 런타임 구성요소
+## 현재 구현된 런타임 구성요소
 
 | 구성요소 | 책임 |
 | --- | --- |
 | `DocumentSession` | 열린 문서, playback·actor/세 track 비영구 선택·transform preview, Transform/Action/Lock-on CRUD 공개 API와 단일 Undo/Redo 스택 관리 |
-| `CommandDispatcher` | 검증된 편집 명령의 실행·병합·되돌리기 |
-| `PlaybackClock` | 편집·재생·렌더 시간 모드와 현재 시간 제공 |
-| `SceneEvaluator` | 지정 시간의 모든 배우·행동·카메라 상태 계산 |
-| `CombatEvaluator` | 공격자·대상 쌍의 교육용 판정 계산 |
-| `ProjectionCoordinator` | 문서 변경을 탑뷰·3D·타임라인에 배포 |
+| `PlaybackClock` | 현재 시간과 playing/paused 상태, seek/play/pause/toggle/stop/advance 및 bounded FIFO 변경 알림 제공 |
+| `SceneDocument.CreateSnapshot` | 지정 시간의 authored transform·단계 상태·resolved Lock-on facing을 하나의 불변 `SceneSnapshot`으로 계산 |
+| `LockOnFacingEvaluator` | `snap`·`continuous`·`keyframe_only` 방향, provenance와 coincidence fallback 계산 |
+| `MovementTrajectoryEvaluator` | 결정적 sample plan과 배우별 자유 방향/Lock-on 방향 paired trajectory 계산 |
+| `SceneProjectionController` | stable `SceneProjectionFrame` 생성, 단일 trajectory cache, 재진입 직렬화와 TopView/WorldView 동일 frame 배포 |
 | `SemanticTimelineController` | Action/Lock-on Add/Delete 버튼을 track별 가용성과 세션 command에 연결 |
 | `ActionLockOnInspectorController` | active semantic track 전환, committed 입력 동기화와 Action/Lock-on 원자적 Apply |
-| `AssetCatalog` | 의미 이름과 플레이스홀더/로컬 자산 참조 연결 |
-| `RenderQueue` | 프레임 렌더·인코딩 작업, 취소·진행·오류 관리 |
-| `RecoveryService` | 자동 저장과 비정상 종료 복구 후보 관리 |
+| `RenderQueue` | 검증된 `RenderJob`의 thread-safe FIFO `Enqueue`·방어 복사 `Snapshot`·`TryPeek`·`TryDequeue`와 사용된 job ID 재사용 방지 |
+
+`RenderQueue`는 아직 프레임을 렌더하거나 FFmpeg를 실행하지 않는다. 취소·진행률·오류 상태와 실제 인코딩 생명주기도 현재 타입의 책임이 아니다. `RenderJob`은 D 드라이브 하위 출력 경로, 크기/FPS/구간, frame count, FFmpeg 실행 파일·인자 같은 불변 요청을 검증한다.
+
+## 후속 계획 구성요소
+
+아래 항목은 아키텍처 확장 지점이지 현재 source tree에 존재하는 production 타입이 아니다.
+
+| 계획 경계 | 현재 상태와 후속 책임 |
+| --- | --- |
+| 독립 command dispatcher | 현재 immutable command 실행과 Undo/Redo는 `DocumentSession` 내부 경계가 담당한다. command 병합·복합 transaction이 필요할 때 별도 조정기로 분리한다. |
+| combat evaluator | 공격·접촉·뒤잡 교육 판정 규칙과 provenance를 구현할 후속 Domain 서비스다. |
+| asset catalog | 의미 Action key와 합법적인 로컬 placeholder/DSR 자산 참조를 연결할 후속 Infrastructure 경계다. |
+| render execution coordinator | `RenderQueue`의 job을 읽어 결정적 frame 생성, 진행·취소·실패 복구와 FFmpeg 인코딩을 수행할 후속 서비스다. |
+| recovery service | 자동 저장과 비정상 종료 복구 후보를 관리할 후속 Infrastructure 서비스다. |
 
 ## 상태 흐름
 
@@ -141,13 +153,28 @@ rollback 중 playback에서 생긴 임시 selection event는 외부에 내보내
 
 ```text
 PlaybackClock 시간 갱신
+→ SceneProjectionController가 최신 (revision, time) 요청 수집
+→ SceneDocument.CreateTrajectorySamplePlan(policy)
+→ MotionRevision·fingerprint 단일 cache 조회 또는 MovementTrajectorySet 재평가
 → SceneDocument.CreateSnapshot(time)
-→ 배우별 보간 Transform + left-hold Action/Lock-on을 담은 불변 SceneSnapshot
-→ 동일 snapshot 인스턴스를 두 consumer에 전달
-→ TopView/WorldView transform과 semantic overlay 갱신
+→ snapshot·trajectory·fingerprint를 동일 SceneProjectionFrame으로 검증
+→ 동일 frame 인스턴스를 TopViewSurface와 WorldViewProjectionAdapter에 순서대로 전달
 ```
 
-재생은 문서를 변경하지 않는다. Action/Lock-on은 해당 시각 이하의 마지막 marker 값을 왼쪽 유지하고 첫 marker 전에는 비어 있음/OFF를 평가한다. 현재 시간의 평가 결과만 갱신하므로 Undo 기록이나 변경 표시를 오염시키지 않는다. TopView는 `Apply`/`ApplyPreview`에서 immutable `DisplayedSemanticOverlays`를 갱신하고 `_Draw()`도 그 동일 read model로 action text·lock line/target marker를 그린다. WorldView는 actor별 `OverlayRoot` 아래 `ActionLabel`, `LockBadge`, 재사용 `LockLine` node를 갱신한다. 두 뷰는 서로를 읽지 않는다.
+재생은 문서를 변경하지 않는다. Action/Lock-on은 해당 시각 이하의 마지막 marker 값을 왼쪽 유지하고 첫 marker 전에는 비어 있음/OFF를 평가한다. 현재 시간의 snapshot과 presentation만 갱신하므로 Undo 기록이나 변경 표시를 오염시키지 않는다. TopView는 `Apply`/`ApplyPreview`에서 immutable 표시 모델을 갱신하고, WorldView는 actor node·mesh·material을 재사용한다. 두 뷰는 서로를 읽지 않으며 반드시 같은 `SceneProjectionFrame`을 소비한다.
+
+### Lock-on 방향과 이동 궤적 투영
+
+`LockOnFacingEvaluator`는 authored transform을 수정하지 않고 `EvaluatedActorFacing`을 계산한다. 결과에는 정규화된 `YawDegrees`뿐 아니라 `FacingResolutionKind`와 `SourceLockOnKeyframeId`가 있어 화면과 테스트가 결과의 출처를 구분할 수 있다.
+
+- `keyframe_only`: 현재 authored Yaw를 그대로 사용한다.
+- `snap`: Lock-on source keyframe 시각의 actor/target 위치로 방향과 offset을 한 번 계산해 다음 Lock-on marker 전까지 고정한다.
+- `continuous`: 현재 시각의 actor/target 위치로 계속 갱신한다.
+- target이 없으면 `TargetUnavailableFallback`, XZ 거리가 `1e-6` 이하로 겹치면 직전 유효 방향 또는 authored Yaw로 결정적으로 후퇴한다.
+
+`SceneSnapshot.ActorTransforms`는 편집 원본 방향, `ActorFacings`는 resolved 표시 방향을 나란히 가진다. Transform 또는 Lock-on/actor 구조 변경은 `Revision`과 `MotionRevision`을 함께 올리고, Action-only 변경은 `Revision`만 올린다. 따라서 `SceneProjectionController`는 `(MotionRevision, TrajectorySamplePlan.Fingerprint)`가 같을 때 `MovementTrajectorySet.WithRevision`으로 최신 문서 revision만 맞추고 동일 actor trajectory geometry를 재사용한다. motion 입력이나 sampling policy가 바뀌면 cache 한 항목을 교체해 전체 궤적을 다시 만든다.
+
+controller는 projection 중 들어온 문서/playback 이벤트를 재귀 호출하지 않고 pending flag 하나로 합친다. 현재 time과 source metadata를 매 반복에서 다시 읽어 최신 요청을 처리하며, plan 생성·평가 전후 metadata가 달라지면 최대 3회 새 stable frame을 얻는다. 생성된 `SceneProjectionFrame`은 document/revision/motion revision/fingerprint 일치를 생성자와 metadata 검사에서 보장한다. TopView와 WorldView에는 이 동일 frame 객체를 전달하므로 snapshot과 trajectory가 서로 다른 revision에서 섞이지 않는다.
 
 ### 저장
 
@@ -162,6 +189,14 @@ SceneDocument 스냅샷
 ```
 
 현재 Domain schema는 `pvp-guide-scene/2`다. Infrastructure serializer만 legacy `/1`을 읽고, Lock-on에 없던 `yawOffsetDegrees=0`, `trackingMode=continuous` 기본값을 적용해 메모리 `/2` 모델로 migration한다. `/2` 저장은 두 필드를 필수로 쓰고 strict round-trip을 검증한다. Godot Editor 프로젝트는 Infrastructure를 참조하지 않으므로 migration/round-trip 완료 여부는 Infrastructure 전체 테스트 결과로만 판정하며 Editor runtime marker에 schema flag를 섞지 않는다.
+
+resolved facing, `MotionRevision`, sample plan/fingerprint, `MovementTrajectorySet`, geometry cache와 현재 playback time은 모두 다시 계산 가능한 파생·세션 상태다. 평가 전후 serialize 문자열이 byte 단위로 같아야 하며 `/2` JSON에는 이 필드를 추가하지 않는다.
+
+## 네트워크 아키텍처
+
+현재 제품은 Windows 11용 오프라인 독립 실행 프로그램이다. 문서 편집, Lock-on 방향·궤적 평가, TopView/3D 표시와 검증은 모두 같은 프로세스와 로컬 파일 경계에서 끝난다. 런타임에 서버, 계정, 원격 DB, 원격 분석, 자동 업로드나 원격 자산 CDN을 호출하지 않는다. `SceneProjectionController`의 source/consumer 관계는 프로세스 내부 C# 인터페이스이며 네트워크 프로토콜이 아니다.
+
+향후 업데이트 확인이나 협업 기능이 필요해져도 현재 저장 schema와 Domain evaluator에 네트워크 상태를 섞지 않는다. 별도 사용자 승인과 명시적 opt-in 경계, 실패 시 완전한 오프라인 동작을 먼저 설계해야 한다. 현재 마일스톤에는 네트워크 동기화와 멀티플레이 재현이 포함되지 않는다.
 
 ## 스레딩
 
@@ -183,6 +218,6 @@ SceneDocument 스냅샷
 - `IRenderEncoder`: FFmpeg 프리셋 또는 이미지 전용 출력
 - `IOverlayRenderer`: 거리, 각도, 공격 범위 등 새 교육 오버레이
 
-다음 구현 단위는 저장된 Lock-on target/mode/offset을 실제 배우 방향 계산에 적용하고, 그 결과를 자유 방향 이동과 Lock-on 이동 궤적으로 분리해 표시하는 것이다. 현재 foundation은 단계 상태 저장·평가·표시까지만 하며 target을 향한 Yaw 변경이나 경로 생성은 하지 않는다.
+현재 완료 범위는 세 Lock-on mode의 resolved facing, provenance/fallback, 결정적 paired trajectory, `SceneProjectionFrame`, TopView/WorldView 표시와 cache/node/resource 재사용까지다. 후속 범위는 실제 DSR animation clip 연결, 충돌·뒤잡 판정 고도화, full timeline 확대·스크롤, 렌더 실행과 배포 패키징이다. 저장 schema v3, 파생 facing/trajectory 영구 저장, 온라인 동기화, 원격 분석, 저작권 자산 번들은 현재 범위에서 제외한다.
 
 플러그인 시스템이나 스크립트 실행 환경은 초기 범위에 넣지 않는다. 실제로 여러 구현을 배포해야 할 때 위 인터페이스를 내부 모듈로 먼저 검증한 뒤 확장한다.

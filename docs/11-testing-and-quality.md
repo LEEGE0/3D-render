@@ -13,7 +13,11 @@
 - 각도 정규화와 최단 회전
 - 위치·회전 보간
 - 키프레임 시간 경계
-- 락온 방향
+- Lock-on `Continuous`/`Snap`/`KeyframeOnly`, offset wrap와 4방위 방향
+- 위치 일치 epsilon의 안·경계·밖, 접선과 왼쪽 극한, target 누락 fallback
+- 결정적 trajectory sample plan, anchor flags와 fingerprint
+- 자유/Lock-on 방향이 동일 위치·시간 sample을 공유하는지
+- evaluator `SegmentSteps`가 sample과 key 규모에 선형인지
 - 선분-원 접촉
 - 부채꼴 포함과 포함 비율
 - 문서 불변 조건
@@ -37,10 +41,13 @@ Godot을 시작하지 않고 `dotnet test`로 실행할 수 있어야 한다.
 
 - 프로젝트 헤드리스 로드
 - 메인 장면 인스턴스 생성
-- 탑뷰와 3D가 같은 스냅샷을 받는지 확인
+- 탑뷰와 3D가 같은 `SceneProjectionFrame`, snapshot과 trajectory 인스턴스를 받는지 확인
 - 패널의 핵심 노드와 입력 연결 존재
 - 자산 누락 시 플레이스홀더 사용
 - 렌더 장면이 지정 시간으로 평가되는지 확인
+- TopView shared path/free tick/Lock-on tick layer와 current/future 명도 확인
+- World trajectory가 actor root와 분리된 고정 root를 사용하고 seek에서 mesh node를 재사용하는지 확인
+- duration 0에서 sample UV와 shader uniform이 정확히 0인지 확인
 
 ### 엔드투엔드 시나리오
 
@@ -96,12 +103,50 @@ Godot을 시작하지 않고 `dotnet test`로 실행할 수 있어야 한다.
 
 ## 성능·안정성 테스트
 
-- 1,000개 이상 키프레임 평가 성능
+- 4 actors/actor당 transform·Lock-on key 각각 100개의 8ms build p95 gate
+- 16 actors/actor당 transform·Lock-on key 각각 1,000개의 기록 전용 진단
+- wall-clock과 별도로 actor/sample/key/anchor/`SegmentSteps`의 선형 operation 상한
 - 반복 Undo/Redo 후 상태 해시 일치
 - 저장 중 예외를 주입했을 때 원본 보존
 - 렌더 취소·재개와 디스크 부족 시뮬레이션
 - 손상 JSON, 거대한 배열, 순환 또는 누락 참조 거부
 - 30분 이상 편집 재생의 메모리 증가 추적
+
+성능 xUnit은 장비 속도로 실패하지 않는다. `TrajectoryPerformanceContractTests`는 실제 production result에서 만든 immutable diagnostics로 additive operation 상한을 검증한다. wall-clock gate는 별도 PowerShell 7 스크립트가 담당한다.
+
+```powershell
+& .\scripts\Measure-TrajectoryPerformance.ps1
+```
+
+대표 4×100 fixture가 8ms를 넘으면 스크립트가 `TRAJECTORY_PERFORMANCE_GATE=FAIL`을 출력하고 nonzero로 끝난다. 16×1,000 fixture는 대규모 증분 cache 설계 판단을 위한 기록이며 절대 시간 gate가 아니다.
+
+## Lock-on 방향·궤적 회귀 범위
+
+이번 마일스톤의 자동 검증은 다음 경계를 명시적으로 포함한다.
+
+- schema는 계속 `pvp-guide-scene/2`이며 facing, trajectory, `MotionRevision`, cache key와 current time 같은 파생 상태를 저장하지 않는다.
+- duration 0 문서는 time `0` sample 하나만 만들고 `PlaybackClock`은 재생 상태나 변경 event를 잘못 만들지 않는다.
+- target 누락은 finite authored facing으로 fallback하고 TopView/World semantic target 표시를 안전하게 숨긴다.
+- Action-only revision은 trajectory actor collection과 Editor geometry를 재사용한다.
+- transform/Lock-on motion revision은 trajectory를 정확히 한 번 다시 만든다.
+- seek/playback current-time 변경은 cached trajectory를 재사용한다. World는 shader uniform만 바꾸고 mesh surface와 node를 다시 만들지 않는다.
+- projection consumer 재진입은 pending 최신 요청으로 직렬화하며 TopView와 WorldView frame 순서를 뒤집지 않는다.
+- preview는 committed trajectory를 다시 만들지 않고 actor body와 semantic lock line만 임시 authored transform으로 표시한다.
+- 4방위 Domain Yaw와 Godot local `+X` 전방, optional model visual offset의 경계를 순수 테스트한다.
+
+## 현재 자동 테스트 수
+
+2026-08-28 같은 worktree에서 각 테스트 프로젝트를 직렬로 fresh 실행한 결과다.
+
+| 프로젝트 | 통과 | 실패 | 건너뜀 |
+| --- | ---: | ---: | ---: |
+| `PvpGuide.Domain.Tests` | 86 | 0 | 0 |
+| `PvpGuide.Application.Tests` | 129 | 0 | 0 |
+| `PvpGuide.Infrastructure.Tests` | 43 | 0 | 0 |
+| `PvpGuide.Editor.Tests` | 109 | 0 | 0 |
+| 합계 | 367 | 0 | 0 |
+
+테스트 수는 이 시점의 실제 결과이며 기능 추가와 함께 바뀔 수 있다. 문서의 숫자를 고정된 영구 목표로 사용하지 않고, 완료 커밋 직전에 다시 실행해 갱신한다.
 
 ## 수동 검수 체크리스트
 
@@ -116,3 +161,38 @@ Godot을 시작하지 않고 `dotnet test`로 실행할 수 있어야 한다.
 ## 완료 전 검증
 
 완료·성공·정상이라고 말하기 전에 해당 주장을 증명하는 최신 명령과 결과를 확인한다. 문서 작업도 예외가 아니다. 최소한 변경 파일, `git diff --check`, 링크 대상, 제외 규칙, 미완성 표식과 staged diff를 확인한다.
+
+Lock-on 방향·궤적 마일스톤의 표준 검증 명령은 다음과 같다. 모든 `dotnet` 명령은 D drive NuGet cache를 명시한다.
+
+```powershell
+$env:NUGET_PACKAGES='D:\3D-render\tools\nuget-packages'
+dotnet test .\tests\PvpGuide.Domain.Tests\PvpGuide.Domain.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Application.Tests\PvpGuide.Application.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Infrastructure.Tests\PvpGuide.Infrastructure.Tests.csproj -c Debug --nologo
+dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo
+
+pwsh -NoProfile -File .\scripts\Test-ProjectSkeleton.ps1
+pwsh -NoProfile -File .\scripts\Measure-TrajectoryPerformance.ps1
+pwsh -NoProfile -File .\scripts\Test-GodotRuntime.ps1
+```
+
+Skeleton 성공 표식은 다음과 같다.
+
+```text
+PROJECT_SKELETON_VERIFICATION=PASS
+```
+
+성능 성공 표식은 대표 fixture의 machine-readable result와 8ms gate를 모두 포함한다.
+
+```text
+TRAJECTORY_PERFORMANCE_RESULT fixture=4x100 build_p95_ms=1.874100 snapshot_p95_ms=0.011300 actors=4 samples=1588 keys=800 segment_steps=3968 ...
+TRAJECTORY_PERFORMANCE_GATE=PASS build_p95_ms=1.874100 limit_ms=8.00
+```
+
+Godot runtime에서는 기존 표식을 보존하면서 아래 한 줄 전체를 exact output으로 요구한다.
+
+```text
+LOCK_ON_MOTION_READY snap=1 continuous=1 keyframe_only=1 coincidence=1 missing_target=1 shared_frame=1 trajectories=1 cache_reuse=1 nodes_reused=1
+```
+
+각 항목은 순서대로 세 tracking mode, 위치 일치 fallback, target 누락, TopView/WorldView shared frame, trajectory 표시, cache 재사용과 Godot node 재사용을 뜻한다. runtime script는 이 줄을 부분 문자열이 아니라 한 줄 전체로 확인한다.

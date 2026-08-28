@@ -2,7 +2,7 @@
 
 Windows 11에서 오프라인으로 실행되는 DARK SOULS REMASTERED PvP 상황 재현·교육 영상 제작 프로그램이다. 일반적인 3D 제작 도구보다 전투 참여자의 위치, 방향, 거리, 타이밍, 락온, 공격과 뒤잡 관계를 빠르고 정확하게 설명하는 데 초점을 둔다.
 
-현재 저장소에는 실행 가능한 Godot 프로젝트 골격, `SceneDocument` 기반 동시 뷰 동기화, 탑뷰 기본 편집, 3D 플레이스홀더, 숫자 Inspector, 공유 Undo/Redo, 시간 스크럽·재생, Transform/Action/Lock-on 세 트랙의 marker·CRUD와 단계 상태 교육 오버레이가 구현되어 있다. 실제 게임 애니메이션 연결, lock-on 방향에 따른 배우 회전, 이동 궤적과 최종 렌더 실행은 후속 마일스톤에서 다룬다.
+현재 저장소에는 실행 가능한 Godot 프로젝트 골격, `SceneDocument` 기반 동시 뷰 동기화, 탑뷰 기본 편집, 3D 플레이스홀더, 숫자 Inspector, 공유 Undo/Redo, 시간 스크럽·재생, Transform/Action/Lock-on 세 트랙의 marker·CRUD와 단계 상태 교육 오버레이가 구현되어 있다. Lock-on 방향 계산과 같은 위치 경로 위의 자유 방향·Lock-on 방향 궤적 표식도 TopView와 WorldView에서 동기화된다. 실제 DSR 애니메이션 연결과 최종 영상 렌더 실행은 후속 마일스톤이다.
 
 ## 핵심 목표
 
@@ -85,7 +85,21 @@ Godot 메인 장면을 실행하면 왼쪽 위 탑뷰, 오른쪽 위 3D 뷰, 아
 5. Action/Lock-on Add·Update·Delete는 Transform과 같은 단일 session history를 사용한다. `InspectorPanel/HistoryToolbar`의 `실행 취소`/`다시 실행`은 Transform/Action/Lock-on section 전환과 무관하게 항상 보인다. 선택 actor가 있고 정지 상태라면 active track이나 Transform exact marker 유무와 관계없이 `CanEditHistory`와 실제 Undo/Redo stack으로 활성화되므로, Action/Lock-on marker를 유지한 채 semantic command를 바로 왕복할 수 있다.
 6. 재생 중에는 두 semantic Add/Delete, Inspector Apply/Enter와 공유 Undo/Redo가 모두 잠긴다. 남아 있던 signal이 들어와도 `DocumentSession`이 다시 검사하므로 revision, history와 두 projection apply count는 바뀌지 않는다. 정지하면 해당 actor/time/selection 기준으로 가용성을 다시 계산한다.
 
-현재 의미 오버레이는 같은 `(revision,time)`의 단일 `SceneSnapshot`에서 나온다. TopView는 `Apply`/`ApplyPreview` 때 immutable `DisplayedSemanticOverlays`를 만들고 실제 `_Draw()`가 그 동일 read model로 `행동: <ActionKey>` label, 활성 Lock-on의 actor→target line과 target marker를 그린다. 이 production read-only state는 진단과 runtime 검증에도 쓰인다. WorldView는 actor의 `OverlayRoot` 아래 재사용 가능한 `ActionLabel`, `LockBadge`, `LockLine`을 갱신한다. disabled Lock-on이나 Action 없음은 해당 overlay를 숨긴다. 여기서 `Snap`/`Continuous`/`Keyframe only`는 저장·표시되는 의미 모드이며, 아직 배우 Yaw를 target 방향으로 계산하거나 이동 경로를 바꾸지는 않는다.
+현재 의미 오버레이는 같은 `(revision,time)`의 단일 `SceneProjectionFrame` 안에 있는 `SceneSnapshot`에서 나온다. TopView는 `Apply`/`ApplyPreview` 때 immutable `DisplayedSemanticOverlays`를 만들고 실제 `_Draw()`가 그 동일 read model로 `행동: <ActionKey>` label, 활성 Lock-on의 actor→target line과 target marker를 그린다. 이 production read-only state는 진단과 runtime 검증에도 쓰인다. WorldView는 actor의 `OverlayRoot` 아래 재사용 가능한 `ActionLabel`, `LockBadge`, `LockLine`을 갱신한다. disabled Lock-on이나 Action 없음은 해당 overlay를 숨긴다.
+
+### Lock-on 방향 계산과 이동 궤적
+
+Lock-on 방향과 궤적은 저장 문서에 파생 데이터를 덧붙이지 않고, 현재 문서와 결정적 샘플 계획에서 평가한 `SceneProjectionFrame`으로 두 뷰에 함께 전달한다.
+
+- `Snap`은 Lock-on 키프레임이 활성화된 정확한 시각의 actor→target 방향에 `yawOffsetDegrees`를 더한 뒤 다음 Lock-on 키프레임까지 그 방향을 유지한다.
+- `Continuous`는 현재 시각의 actor와 target 위치에서 방향을 계속 다시 계산한다. 두 위치가 일치하면 같은 Lock-on 구간의 이전 유효 방향을 유지하고, 이전 방향도 없으면 authored Yaw로 되돌아간다.
+- `KeyframeOnly`는 target을 향해 자동 회전하지 않고 Transform track의 authored Yaw를 그대로 사용한다.
+- 위치 일치 판정은 X/Z 상대 거리 `1e-6` 이하를 포함한다. target이 없는 비정상 평가 입력은 예외나 NaN 방향을 만들지 않고 authored Yaw와 `TargetUnavailableFallback` 진단으로 되돌아간다. 정상 문서 편집·생성 단계에서는 활성 Lock-on이 self 또는 존재하지 않는 target을 가리키지 못하도록 별도로 검증한다.
+- 자유 방향과 Lock-on 방향은 **서로 다른 이동 위치를 만들지 않는다**. 두 표시는 같은 transform 위치 경로와 같은 sample time을 공유하며, authored/free Yaw tick과 Lock-on-resolved Yaw tick만 분리한다.
+- TopView는 공유 위치 polyline, free/Lock-on tick, anchor marker를 그린다. WorldView는 actor body의 자식이 아닌 world-fixed `TrajectoryOverlayRoot` 아래에서 같은 순서의 위치 경로와 두 Yaw tick mesh를 재사용한다. seek와 preview는 world 궤적 geometry를 다시 만들거나 actor 이동에 끌고 가지 않는다.
+- projection cache는 `(MotionRevision, sampling fingerprint)`를 기준으로 한다. Action-only 변경은 새 문서 revision의 snapshot/frame을 만들되 기존 trajectory actor payload와 mesh를 재사용한다. Transform 또는 Lock-on 변경은 MotionRevision을 올리고 현재 구현에서는 전체 trajectory를 정확히 한 번 다시 만든다.
+
+현재 궤적은 Transform keyframe 보간 결과를 시각화하며 root motion을 적용하지 않는다. 실제 DSR HKX animation, root motion 추출·합성, 영상 렌더 실행과 게임패드 조작은 이 완료 범위에 포함되지 않는다. 타임라인 확대·스크롤·프레임/키프레임/구간 스냅도 우선순위 검토만 마쳤으며 별도 후속 작업이다.
 
 이 흐름은 Windows 11 오프라인 Godot 실행 환경에서 로컬 문서만 바꾼다. marker를 누르거나 시간을 scrub하고 재생/정지하는 행위는 저장 문서, revision, Undo/Redo history에 들어가지 않는다.
 
@@ -113,7 +127,7 @@ UI는 잠긴 조작을 성공처럼 보이게 하거나 값을 자동 clamp해 �
 
 stale preimage란 조작을 시작할 때 잡은 immutable full keyframe이 다른 변경으로 이미 달라진 경우다. Transform은 ID·time·position·정규화된 Yaw를, Action은 ID·time·ActionKey를, Lock-on은 ID·time·enabled·target·offset·mode를 모두 비교한다. 이 경우 command는 부분 변경 없이 `Conflict`가 되며 외부의 최신 committed 값은 보존된다.
 
-Transform/Action/Lock-on keyframe Add/Update/Delete, marker 선택, 단계 상태와 교육 overlay까지 제공한다. 실제 DSR 애니메이션 재생, Lock-on 방향 계산, Lock-on과 자유 방향 이동 궤적, 영상 렌더 실행과 게임패드 조작은 아직 제공하지 않는다. 다음 구현 단위는 Lock-on 방향 계산과 이동 궤적이다.
+Transform/Action/Lock-on keyframe Add/Update/Delete, marker 선택, 단계 상태 교육 overlay, Lock-on 방향 계산과 자유/Lock-on Yaw 궤적을 제공한다. 다음 성능 확장 단계에서는 actor별·변경 구간별 증분 trajectory cache를 추가해야 하며, 실제 DSR 애니메이션·root motion·영상 렌더 실행은 이후 마일스톤에서 연결한다.
 
 ### 기본 편집과 타임라인 실행·검증
 
@@ -133,7 +147,10 @@ dotnet test .\tests\PvpGuide.Infrastructure.Tests\PvpGuide.Infrastructure.Tests.
 dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug --nologo
 & .\scripts\Test-ProjectSkeleton.ps1
 & .\scripts\Test-GodotRuntime.ps1
+& .\scripts\Measure-TrajectoryPerformance.ps1
 ```
+
+현재 기준 전체 test count는 Domain `86`, Application `129`, Infrastructure `43`, Editor `109`이며 각 프로젝트에서 실패가 0이어야 한다. 성능 스크립트는 PowerShell 7에서 D 드라이브 NuGet cache를 사용하고 대표 `4 actors × actor당 100 transform + 100 Lock-on key` fixture의 production trajectory build p95를 측정한다. 임시 완료 gate는 `8ms`이고 fresh 진단값은 `1.8741ms`로 PASS다. `16 actors × actor당 1,000 transform + 1,000 Lock-on key`의 fresh `27.0564ms`는 확장 기준 기록용이며 wall-clock gate가 아니다. 이 규모를 제품 완료 범위로 올리기 전 actor별·변경 구간별 증분 cache가 필수다.
 
 런타임 검증은 기존 준비·동시 투영 표식과 함께 다음 기본 편집 표식을 정확히 요구한다.
 
@@ -165,6 +182,12 @@ TIMELINE_KEYFRAME_CRUD_READY add=1 update=1 time_move=1 delete=1 undo=1 redo=1 d
 ACTION_LOCK_ON_TRACK_READY action_crud=1 lock_crud=1 step_eval=1 selection_sync=1 undo_redo=1 playback_lock=1 top_overlay=1 world_overlay=1
 ACTION_LOCK_ON_PLAYBACK_GUARDS_READY action_add=1 action_apply=1 action_delete=1 lock_add=1 lock_apply=1 lock_delete=1 undo=1 redo=1
 ACTION_LOCK_ON_REVIEW_FIXES_READY empty_action_add=1 empty_lock_add=1 detailed_errors=1 observer_commit=1
+```
+
+Lock-on motion probe는 세 mode, 위치 일치와 target 없음 fallback, Top/World 공유 frame, 궤적 cache 및 Godot node/resource 재사용을 모두 통과한 뒤 다음 exact marker를 출력한다.
+
+```text
+LOCK_ON_MOTION_READY snap=1 continuous=1 keyframe_only=1 coincidence=1 missing_target=1 shared_frame=1 trajectories=1 cache_reuse=1 nodes_reused=1
 ```
 
 ## 기준 좌표와 뒤잡 규칙
@@ -237,8 +260,8 @@ Task 4의 Domain은 Godot 타입에 의존하지 않는 `SceneDocument`를 단�
 - 위치는 선형 보간하고 yaw는 0/360 경계에서 최단 경로로 보간한다. 정확히 180°가 동률이면 양의 방향을 선택한다. 첫 키 이전은 첫 상태, 마지막 키 이후는 마지막 상태다.
 - `SceneDocument`는 현재 `pvp-guide-scene/2` 스키마, 문서 ID, 길이, FPS, 고유 배우와 Transform/Action/Lock-on track, monotonic revision을 소유한다. 문서 길이와 평가 시간은 유한하고 범위 안이어야 한다.
 - 성공한 배우·키프레임 추가는 revision을 정확히 1 올리고 변경 이벤트를 정확히 한 번 발생시킨다. 실패한 변경은 revision·이벤트·기존 데이터를 바꾸지 않는다. 선택 배우·현재 시간·활성 도구 등 세션 상태와 Godot `Node`·`Vector*`·`Resource`는 Domain에 넣지 않는다.
-- `CreateSnapshot(timeSeconds)`는 문서 ID, revision, 평가 시간과 배우별 평가 변환을 불변·방어 복사 형태의 `SceneSnapshot`으로 반환한다.
-- `ISceneProjectionConsumer.Apply(SceneSnapshot)`은 Godot 타입이 없는 포트다. `SceneProjectionController`는 하나의 snapshot source와 서로 다른 top/world consumer를 주입받고, 문서 변경 event 1회당 snapshot을 한 번만 만들어 동일 인스턴스를 두 소비자에게 각각 한 번 전달한다. 같은 revision 이벤트는 중복 전달하지 않으며 Dispose 이후에는 전달하지 않는다.
+- `CreateSnapshot(timeSeconds)`는 문서 ID, revision, MotionRevision, 평가 시간과 배우별 평가 변환·단계 상태·Lock-on facing을 불변·방어 복사 형태의 `SceneSnapshot`으로 반환한다.
+- `ISceneProjectionConsumer.Apply(SceneProjectionFrame)`은 Godot 타입이 없는 포트다. `SceneProjectionController`는 snapshot, trajectory와 sampling fingerprint가 묶인 동일 frame 인스턴스를 서로 다른 top/world consumer에 각각 한 번 전달한다. 같은 `(revision,time)`은 중복 전달하지 않으며 Dispose 이후에는 전달하지 않는다.
 - Main 장면은 `TopViewSurface`와 `WorldViewProjectionAdapter`를 실제 소비자로 조립한다. 초기 투영 뒤 `PROJECTION_SYNC_READY revision=1 top=1 world=1`, Move→Undo→Redo 뒤 `BASIC_EDITING_READY revision=4 selected=runtime-actor moved=1 undo=1 redo=1 top=4 world=4 actors=1`을 출력한다.
 - `DocumentSession`이 소유한 `PlaybackClock`은 현재 시각과 재생 여부를 관리하고, `SceneProjectionController`는 `(revision, time)` 조합이 바뀔 때만 두 소비자에 같은 평가 snapshot을 적용한다. 시간 변경은 revision이나 Undo/Redo history가 아니다.
 - `TimelineController`는 slider, Play/Pause·Stop 버튼과 표시 label을 playback에 연결하며 Main의 `Space` 입력도 같은 toggle API를 호출한다. `TransformTrackSurface` marker click, Add/Delete 버튼도 session CRUD API에 연결하고, Inspector는 selected keyframe의 Time/pose를 원자적으로 Apply한다.
@@ -260,7 +283,7 @@ Domain·Editor 테스트 실패 0, 구조 검사 PASS, `PROJECT_RUNTIME_READY`, 
 
 Task 5는 저작권 없는 합성 `gangqueen-topview-guide-v1` fixture를 `SceneDocument`로 가져오고, 문서를 버전형 JSON으로 안전하게 저장하며, Godot/FFmpeg를 직접 실행하지 않는 렌더 작업 큐를 제공한다. fixture는 `samples/guides/synthetic-topview-v1.scene.json`에 두고 `format`, `coordinate_system`, `backstab_rules`, `scene`, `evaluations`와 알 수 없는 원본 필드를 보존한다. 네 역할(`host`, `invader`, `phantom1`, `phantom2`)과 t=`0.25`, `0.9`, `1.4` 키프레임, `lock_on`/`target` 및 `current_index` 선택 힌트(문서 의미 데이터에는 미저장)를 검증한다. 가져오기 설정은 origin `(100,200)`, scale `0.1`, ground height `0`, FPS `30`이며 guide x/y를 world X/Z로 변환한다.
 
-저장 포맷은 현재 `pvp-guide-scene/2`인 버전형 camelCase JSON이다. v2는 각 Lock-on frame의 `yawOffsetDegrees`와 `trackingMode`를 필수로 기록한다. serializer는 기존 `/1`을 읽을 때 빠진 offset을 `0`, mode를 `continuous`로 메모리 migration하고 다시 저장할 때 `/2`로 쓴다. `System.Text.Json` DTO로 indented UTF-8과 strict numbers를 사용하고 알 수 없는 문서 멤버는 거부한다. revision/event/current time과 actor/세 track selection·UI·Godot 상태는 저장하지 않는다. `SaveAtomicAsync`는 절대 경로, `.pvpscene.json` 확장자, 존재하는 부모를 확인한 뒤 같은 디렉터리의 고유 임시 파일에 flush하고 다시 Deserialize 검증 후 원자적으로 교체한다. 실패·취소 시 기존 파일 바이트를 보존하고 임시 파일을 정리하며, 교체 실패 시 검증된 임시 파일을 복구용으로 남긴다.
+저장 포맷은 현재 `pvp-guide-scene/2`인 버전형 camelCase JSON이다. v2는 재평가에 필요한 각 Lock-on frame의 `yawOffsetDegrees`와 `trackingMode`를 필수로 기록하므로 유지한다. facing, trajectory, MotionRevision, cache key와 current time은 문서에서 다시 계산할 수 있는 런타임 파생 상태라 저장하지 않으며, snapshot/facing/trajectory 평가 전후 serialize 문자열도 byte-for-byte 동일하다. 새 파생 필드 때문에 schema를 올리지 않는 이유는 저장 의미 계약이 바뀌지 않았기 때문이다. serializer는 기존 `/1`을 읽을 때 빠진 offset을 `0`, mode를 `continuous`로 메모리 migration하고 다시 저장할 때 `/2`로 쓴다. `System.Text.Json` DTO로 indented UTF-8과 strict numbers를 사용하고 알 수 없는 문서 멤버는 거부한다. revision/event/current time과 actor/세 track selection·UI·Godot 상태는 저장하지 않는다. `SaveAtomicAsync`는 절대 경로, `.pvpscene.json` 확장자, 존재하는 부모를 확인한 뒤 같은 디렉터리의 고유 임시 파일에 flush하고 다시 Deserialize 검증 후 원자적으로 교체한다. 실패·취소 시 기존 파일 바이트를 보존하고 임시 파일을 정리하며, 교체 실패 시 검증된 임시 파일을 복구용으로 남긴다.
 
 serializer는 필수 구조 멤버가 null이거나 중첩 배열·객체 항목이 null인 JSON도 경로를 포함한 구조 오류로 거부한다. importer는 중첩 객체의 알 수 없는 멤버를 warning으로 알리면서 raw source metadata에 보존하고, 원자 저장은 임시 파일 검증 직후 move 직전에 취소를 다시 확인해 기존 destination을 보호한다.
 
@@ -319,7 +342,8 @@ dotnet test .\tests\PvpGuide.Editor.Tests\PvpGuide.Editor.Tests.csproj -c Debug 
 - 탑뷰 선택·이동·회전, 동일 미리보기의 3D 투영, 숫자 Inspector와 Undo/Redo 구현
 - 타임라인 3A/3B: slider 스크럽, Play/Pause·Stop·Space, `(revision,time)` 동시 투영, transform marker 선택 및 Add/Time·pose Apply/Delete CRUD·Undo/Redo 구현
 - 타임라인 Action/Lock-on foundation: v2 저장 migration/round-trip, step evaluation, marker·구간 lane, semantic Inspector CRUD, 공유 history, playback lock과 TopView/WorldView 교육 overlay 구현
-- 다음 구현 단위: Lock-on 방향 계산과 Lock-on/자유 방향 이동 궤적
+- Lock-on motion: Snap/Continuous/KeyframeOnly facing, 위치 일치·target 없음 fallback, 결정적 trajectory sampling, TopView/WorldView 공유 위치 경로와 free/Lock-on Yaw 표식, Action-only cache/node 재사용과 motion full rebuild 구현
+- 다음 구현 단위: actor별·변경 구간별 증분 trajectory cache 설계와 후속 편집·렌더 마일스톤 정리
 
 ## 법적·운영 주의
 

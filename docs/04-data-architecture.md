@@ -6,27 +6,26 @@
 
 ```text
 SceneDocument
-├─ Metadata
-├─ CoordinateSpace
-├─ TimelineSettings
+├─ DocumentId / Name / Note
+├─ DurationSeconds / FramesPerSecond
+├─ ImportMetadata? (SourceFormat / RawSourcePayload)
 ├─ Actors[]
-│  ├─ Identity / Role / Appearance
-│  └─ ActorTrack
-│     ├─ TransformKeyframes[]
+│  └─ ActorTrack (ActorId / DisplayName / Role)
+│     ├─ TransformKeyframes[] (authored position/yaw)
 │     ├─ ActionKeyframes[]
 │     └─ LockOnKeyframes[]
-├─ CameraTracks[]
-├─ OverlaySettings
-├─ CombatRuleSet
-└─ ExtensionData
+├─ Revision (runtime 변경 순서, 비저장)
+└─ MotionRevision (motion 변경 순서, 비저장)
 ```
+
+위 트리는 현재 production `SceneDocument`의 실제 경계다. 카메라 트랙, combat rule set과 overlay 설정은 후속 모델이며 현재 `/2` 저장 파일의 필드인 것처럼 다루지 않는다.
 
 ## 식별자와 버전
 
 - 문서, 배우, 트랙, 키프레임은 안정적인 ID를 가진다.
 - 표시 이름은 변경할 수 있지만 참조는 ID로 연결한다.
 - 시간 정렬 순서가 바뀌어도 ID는 유지한다.
-- 저장 최상단에 `schemaVersion`을 둔다.
+- 저장 최상단에 문자열 필드 `schema`를 둔다.
 - 현재 내부 저장 버전은 `pvp-guide-scene/2`다. legacy `pvp-guide-scene/1`은 읽기 migration 입력으로만 지원한다.
 - 가져온 원본 형식과 버전은 `source` 메타데이터에 별도로 기록한다.
 
@@ -36,19 +35,14 @@ SceneDocument
 
 | 필드 | 형식 | 설명 |
 | --- | --- | --- |
-| `schemaVersion` | string | 내부 저장 포맷 버전 |
-| `documentId` | UUID | 문서 안정 식별자 |
+| `schema` | string | 현재 값 `pvp-guide-scene/2`인 내부 저장 포맷 버전 |
+| `documentId` | string | 공백이 아닌 문서 안정 식별자 |
 | `name` | string | 장면 이름 |
-| `note` | string | 교육 설명 |
+| `note` | string/null | 선택적인 교육 설명 (`SceneDocument.Note`는 nullable) |
 | `durationSeconds` | double | 전체 길이 |
 | `framesPerSecond` | int | 시간 표시·렌더 기준 FPS |
-| `coordinateSpace` | object | 단위, 축, 원점과 가져오기 변환 |
 | `actors` | array | 배우와 트랙 |
-| `cameraTracks` | array | 카메라 키프레임 |
-| `combatRules` | object | 판정 규칙 세트 |
-| `overlaySettings` | object | 표시·출력 여부 |
-| `source` | object | 가져온 원본 정보와 해시 |
-| `extensionData` | object | 알 수 없는 보존 필드 |
+| `importMetadata` | object/null | `sourceFormat`과 원본 `rawSourcePayload` |
 
 ### TransformKeyframe
 
@@ -106,7 +100,49 @@ marker 클릭은 target active track을 먼저 확정한 뒤 bounded pause/seek 
 - `yawOffsetDegrees`: 유한한 값이며 생성 시 `[-180, 180)`으로 정규화
 - `trackingMode`: `snap`, `continuous`, `keyframe_only`; 공개 Domain 생성 경로는 이 enum에 정의되지 않은 값도 거부
 
-현재 mode와 offset은 저장·Inspector·lane label·snapshot·overlay까지 전달되는 의미 데이터다. 아직 target 방향으로 actor transform을 회전시키거나 이동 궤적을 생성하지 않는다.
+mode와 offset은 저장·Inspector·lane label·snapshot·overlay뿐 아니라 resolved facing과 paired trajectory 평가 입력으로 사용한다. authored `TransformKeyframe.YawDegrees` 자체는 바꾸지 않는다.
+
+### EvaluatedActorFacing과 세 tracking mode
+
+`SceneDocument.CreateSnapshot(time)`은 모든 authored transform과 단계 상태를 먼저 평가하고, 같은 actor 사전으로 `LockOnFacingEvaluator.Evaluate`를 호출해 `ActorFacings`를 만든다. `EvaluatedActorFacing`은 다음 세 값을 갖는 불변 record다.
+
+- `YawDegrees`: `[0, 360)`로 정규화된 표시 방향
+- `ResolutionKind`: 방향을 어떤 규칙으로 얻었는지 나타내는 `FacingResolutionKind`
+- `SourceLockOnKeyframeId`: 현재 left-hold Lock-on 상태의 출처 ID 또는 첫 marker 전의 `null`
+
+mode별 의미는 다음과 같다.
+
+| mode/상태 | 평가 시각과 결과 | provenance |
+| --- | --- | --- |
+| Lock-on OFF | 현재 시각 authored Yaw | `AuthoredDisabled` |
+| `keyframe_only` | 현재 시각 authored Yaw; target 방향 계산 안 함 | `AuthoredKeyframeOnly` |
+| `snap` | source Lock-on keyframe 시각의 actor→target XZ 방향에 offset을 더해 고정 | `SnapTarget` |
+| `continuous` | 현재 시각 actor→target XZ 방향에 offset을 더해 갱신 | `ContinuousTarget` |
+| target 누락 | 현재 authored Yaw | `TargetUnavailableFallback` |
+| 위치 일치 | 직전 유효 방향 또는 authored Yaw | `CoincidentPrevious` / `CoincidentAuthoredFallback` |
+
+위치 일치는 XZ 상대 벡터 길이가 `LockOnFacingEvaluator.CoincidenceEpsilon = 1e-6` 이하일 때다. `continuous`는 actor와 target의 transform anchor를 source marker부터 현재 시각까지 정렬해 마지막 유효 segment 방향을 찾는다. 유효 방향에서 일치점으로 들어가는 segment는 epsilon 원 경계를 수치적으로 안정된 방식으로 계산한다. 이전 방향이 없으면 authored Yaw로 후퇴한다. 이 규칙은 NaN/무한 방향을 만들지 않고 같은 입력에 같은 provenance를 낸다.
+
+### MotionRevision과 일반 Revision
+
+`Revision`은 모든 성공한 영구 변경에 증가한다. `MotionRevision`은 actor 추가, Transform Add/Update/Delete, Lock-on Add/Update/Delete처럼 위치·자유 방향·resolved 방향·궤적을 바꿀 수 있는 변경에만 함께 증가한다. Action-only Add/Update/Delete는 `Revision`만 증가한다. 선택, 재생 헤드와 preview는 둘 다 바꾸지 않는다.
+
+`SceneSnapshot`과 `MovementTrajectorySet`은 `Revision`과 `MotionRevision`을 함께 운반한다. Action-only 변경에서는 `MovementTrajectorySet.WithRevision(newRevision)`이 새 wrapper를 만들되 기존 `Actors` dictionary와 actor trajectory를 그대로 공유한다. 따라서 consumer는 최신 semantic snapshot과 이전과 동일한 motion geometry를 안전하게 조합할 수 있다. motion 변경에서는 `MotionRevision`이 달라져 재평가한다.
+
+### TrajectorySamplePlan과 paired trajectory
+
+`TrajectorySamplingSettings`는 `PolicyVersion`과 `MaximumUniformRate`를 가진다. 현재 Application 정책은 `lock-on-motion/v1`, 최대 30Hz이며 실제 `UniformRate`는 `min(document FPS, 30)`이다. `MovementTrajectoryEvaluator.CreatePlan`은 0초·문서 끝·uniform grid에 모든 actor의 Transform/Lock-on keyframe 시각을 합치고 중복을 제거해 엄격히 증가하는 `OrderedTimes`를 만든다. 0초 문서는 `[0]` 하나를 가진다.
+
+`TrajectorySamplePlan.Fingerprint`는 domain 구분 문자열, policy version, uniform rate, sample 수와 각 double의 정확한 bit 표현을 SHA-256으로 계산한 소문자 16진수다. 생성자에 외부 fingerprint가 주어지면 payload와 다시 계산한 값이 정확히 같아야 한다. 따라서 rate나 anchor 하나가 달라진 plan을 같은 cache key로 오인하지 않는다.
+
+배우별 `ActorMovementTrajectory.Samples`의 각 `MovementTrajectorySample`은 다음 paired 값을 한 위치·시각에 묶는다.
+
+- `Position`: authored 이동 경로
+- `FreeYawDegrees`: authored 자유 방향
+- `LockOnFacing`: 같은 시각 resolved Lock-on 방향과 provenance
+- `AnchorKind`: `ActorTransform`, `ActorLockOn`, `ActiveTargetTransform`의 flags 조합
+
+`MovementTrajectorySet`은 document/revision/motion revision, `SamplingPolicyFingerprint`, `UniformRate`, actor dictionary와 전체 `SegmentSteps`를 갖는다. evaluator는 정렬된 canonical time을 forward cursor로 한 번 훑으며 sample마다 전체 key 목록을 다시 스캔하지 않는다. `SegmentSteps`는 actor별 canonical visit, Transform/Lock-on cursor 이동과 continuous facing segment 진행 횟수를 합친 결정적 진단값이다. wall-clock 시간이 아니며 key/sample 규모에 선형인지 회귀 테스트하는 데 쓴다.
 
 ## 좌표 변환
 
@@ -145,13 +181,13 @@ delta = ((rightYaw - leftYaw + 540) % 360) - 180
 yaw = normalizeDegrees(leftYaw + delta * t)
 ```
 
-180°가 정확히 같은 양방향인 경우 정책상 양의 방향 또는 이전 회전 방향을 선택하고 테스트로 고정한다.
+180°가 정확히 같은 양방향인 경우 현재 `ActorTrack`과 trajectory forward cursor는 양의 180° 방향을 선택한다. 이 tie-break는 같은 입력에서 snapshot과 trajectory가 같은 Yaw를 내도록 테스트로 고정한다.
 
 ### 단계 상태
 
 현재 `ActorTrack.EvaluateAction(time)`과 `EvaluateLockOn(time)`은 해당 time 이하에서 가장 늦은 marker 하나를 선택하는 left-hold 평가다. 첫 Action marker 전에는 `(SourceKeyframeId=null, ActionKey=null)`, 첫 Lock-on marker 전이나 빈 track에는 `(null, false, null, 0, Continuous)`를 반환한다. 선택 marker 이후 값은 다음 같은 track marker 전까지 유지되고 마지막 값은 문서 끝까지 유지된다. Transform처럼 두 값 사이를 보간하지 않는다.
 
-`SceneDocument.CreateSnapshot(time)`은 배우별 `EvaluatedTransform`과 `EvaluatedActorTimelineState(Action, LockOn)`을 같은 불변 snapshot에 넣고 입력 dictionary를 방어 복사한다. TopView와 WorldView가 이 한 snapshot을 공유하므로 서로 다른 time/revision의 action label과 lock line을 조합할 수 없다. 공격 지속 시간, animation clip 종료와 event window는 아직 카탈로그가 없으므로 단순 left-hold를 대체하지 않는다.
+`SceneDocument.CreateSnapshot(time)`은 배우별 `EvaluatedTransform`, `EvaluatedActorTimelineState(Action, LockOn)`와 `EvaluatedActorFacing`을 같은 불변 snapshot에 넣고 입력 dictionary를 방어 복사한다. TopView와 WorldView가 trajectory와 함께 하나의 `SceneProjectionFrame`으로 이 snapshot을 공유하므로 서로 다른 time/revision의 body 방향, action label, lock line과 path를 조합할 수 없다. 공격 지속 시간, animation clip 종료와 event window는 아직 카탈로그가 없으므로 단순 left-hold를 대체하지 않는다.
 
 ## 가이드 V1 가져오기
 
@@ -160,11 +196,11 @@ yaw = normalizeDegrees(leftYaw + delta * t)
 | 원본 | 내부 |
 | --- | --- |
 | `scene.name`, `scene.note` | 문서 메타데이터 |
-| `coordinate_system` | 원본 좌표 설명과 변환 설정 |
-| `backstab_rules` | `CombatRuleSet` |
-| `characters.*` | 배우와 같은 시간의 세 트랙 키프레임 |
-| `action` | 의미 기반 행동 키 |
-| `evaluations` | 비교·회귀 검증용 원본 평가 스냅샷 |
+| `coordinate_system` | 지원 축 선언을 검증하고 X/Z 변환에 사용; 선언 원문은 raw source metadata에도 보존 |
+| `scene.keyframes[].actors[]` | 배우별 같은 시각의 Transform/Action/Lock-on keyframe |
+| actor `action` | 의미 기반 Action key |
+| actor `lock_on`, `lock_target` | offset 0·`Continuous`인 Lock-on keyframe |
+| `backstab_rules`, `evaluations` | 현재 `SceneDocument`로 해석하지 않고 `ImportMetadata.RawSourcePayload`에 보존하며 warning 제공 |
 
 원본의 `current_index`는 편집 UI 상태이므로 저장 의미 데이터와 분리해 가져오기 완료 후 선택 시간 힌트로만 사용한다.
 
@@ -183,4 +219,8 @@ yaw = normalizeDegrees(leftYaw + delta * t)
 
 ## 파생 데이터와 캐시
 
-이동 궤적 샘플, 뒤잡 포함 비율, 바운딩 박스, 렌더용 변환 행렬과 썸네일은 파생 데이터다. 저장 파일에 필수 원본으로 넣지 않는다. 캐시 키는 문서 리비전, 트랙 리비전, 시간 범위와 설정 해시를 포함해 잘못된 재사용을 막는다.
+`ActorFacings`, `MotionRevision`, `TrajectorySamplePlan`과 fingerprint, `MovementTrajectorySet`, `SegmentSteps`, TopView/World geometry, node/resource cache와 현재 playback time은 모두 파생 또는 세션 데이터다. Infrastructure 회귀 테스트는 실제 snapshot/facing/trajectory 평가 전·후의 `SceneDocumentSerializer.Serialize` 문자열과 deserialize 후 재직렬화 문자열이 byte-for-byte 같은지 확인한다. JSON property tree에는 `facing`, `trajectory/trajectories`, `motionRevision`, `cache/cacheKey`, `currentTime`, `revision` 의미의 필드가 없어야 한다. schema는 계속 `pvp-guide-scene/2`다.
+
+Application의 trajectory cache key는 `(MotionRevision, TrajectorySamplePlan.Fingerprint)` 한 항목이다. Action-only revision에서는 `WithRevision`으로 geometry identity를 보존하고, Transform/Lock-on/actor 변경이나 sampling plan 변경에서만 rebuild한다. Editor의 TopView는 동일 actor trajectory dictionary 참조면 immutable geometry를 재사용하고 presentation만 다시 만든다. WorldView는 `(MotionRevision, SamplingPolicyFingerprint)`의 `WorldTrajectoryGeometryKey`가 같으면 actor geometry dictionary, 세 `ImmediateMesh`와 material을 유지하고 shader의 현재 시간 uniform만 바꾼다.
+
+뒤잡 판정 결과, 향후 렌더용 변환 행렬과 썸네일도 같은 원칙의 파생 데이터다. 실제 DSR animation clip 참조와 collision/backstab 결과를 저장 모델에 넣을지는 별도 schema 설계 전까지 확정하지 않는다. 현재 마일스톤은 새 schema를 만들지 않는다.
